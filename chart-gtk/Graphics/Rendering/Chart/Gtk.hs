@@ -54,8 +54,8 @@ initGuiOnce = do
 -- | Display a renderable in a gtk window.
 --
 -- Note that this is a convenience function that initialises GTK on
--- it's first call, but not subsequent calls. Hence it's 
--- unlikely to be compatible with other code using gtk. In 
+-- it's first call, but not subsequent calls. Hence it's
+-- unlikely to be compatible with other code using gtk. In
 -- that case use createRenderableWindow.
 renderableToWindow :: Renderable a -> Int -> Int -> IO ()
 renderableToWindow chart windowWidth windowHeight = do
@@ -79,11 +79,64 @@ createRenderableWindow :: Renderable a -> Int -> Int -> IO G.Window
 createRenderableWindow chart windowWidth windowHeight = do
     window <- G.windowNew
     canvas <- G.drawingAreaNew
+    zooms <- newIORef initialZoom
     G.widgetSetSizeRequest window windowWidth windowHeight
     G.onExpose canvas $ const (updateCanvas chart canvas)
+    G.onButtonPress canvas (onButtonEvent zooms canvas)
+    G.onButtonRelease canvas (onButtonEvent zooms canvas)
     G.set window [G.containerChild G.:= canvas]
     return window
 
+data Transform = Transform Double Double Double Double
+                 deriving (Show)
+
+data ZoomState = ZoomState { press :: Maybe (Double,Double),
+                             stack :: [Transform] } deriving (Show)
+initialZoom = ZoomState { press = Nothing, stack = [] }
+
+onButtonEvent :: IORef ZoomState -> G.DrawingArea -> GE.Event -> IO Bool
+onButtonEvent ref _  (e@GE.Button{ GE.eventClick = GE.SingleClick,
+                                   GE.eventButton = GE.LeftButton }) = do
+  putStrLn $ show e
+  onButtonPress ref (GE.eventX e) (GE.eventY e)
+
+onButtonEvent ref canvas (e@GE.Button{ GE.eventClick = GE.ReleaseClick,
+                                  GE.eventButton = GE.LeftButton }) = do
+  putStrLn $ show e
+  onButtonRelease ref canvas (GE.eventX e) (GE.eventY e)
+
+onButtonEvent ref canvas (e@GE.Button{ GE.eventClick = GE.SingleClick,
+                                       GE.eventButton = GE.RightButton }) = do
+  putStrLn $ show e
+  popStack ref
+  state <- readIORef ref
+  putStrLn $ show state
+  return True
+
+onButtonEvent _ _ _ = return False
+
+onButtonPress ref x y = do
+  modifyIORef ref $ \z -> z{ press = Just (x,y) }
+  return True
+
+popStack :: IORef ZoomState -> IO ()
+popStack ref = modifyIORef ref go where
+  go (z@ZoomState { stack=x:xs }) = z { stack = xs }
+  go z = z
+
+onButtonRelease :: IORef ZoomState -> G.DrawingArea -> Double -> Double -> IO Bool
+onButtonRelease ref canvas x y = let
+    go (z@ZoomState{ press = Just (x',y'), stack =stack }) =
+      z { press=Nothing, stack = stack' } where
+        stack' = if dx < 1.0 && dy < 1.0 then stack
+                 else t:stack
+                   where
+                     dx = abs (x-x')
+                     dy = abs (y-y')
+                     t = Transform (min x x') dx (min y y') dy
+
+    go z = z -- Don't know what this is
+  in do {modifyIORef ref go; return True }
 
 updateCanvas :: Renderable a -> G.DrawingArea  -> IO Bool
 updateCanvas chart canvas = do
@@ -92,6 +145,6 @@ updateCanvas chart canvas = do
     regio <- G.regionRectangle $ GE.Rectangle 0 0 width height
     let sz = (fromIntegral width,fromIntegral height)
     G.drawWindowBeginPaintRegion win regio
-    G.renderWithDrawable win $ runBackend (defaultEnv bitmapAlignmentFns) (render chart sz) 
+    G.renderWithDrawable win $ runBackend (defaultEnv bitmapAlignmentFns) (render chart sz)
     G.drawWindowEndPaint win
     return True
