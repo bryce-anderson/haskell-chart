@@ -98,6 +98,11 @@ createRenderableWindow chart windowWidth windowHeight = do
     G.set window [G.containerChild G.:= canvas]
     return window
 
+leftmargin = 40.0
+rightmargin = 12.0
+topmargin = 40.0
+bottommargin = 30.0
+
 createZoomableWindow :: forall x y . (Ord x, Ord y) => Layout x y -> Int -> Int -> IO G.Window
 createZoomableWindow layout windowWidth windowHeight = do
     window <- G.windowNew
@@ -107,12 +112,11 @@ createZoomableWindow layout windowWidth windowHeight = do
     G.onExpose canvas $ const $ do
       zoom <- readIORef zooms
       (width,height) <- G.widgetGetSize canvas
-      let dwidth = fromIntegral width :: Double
-          dheight = fromIntegral height :: Double
+      let dwidth = fromIntegral width
+          dheight = fromIntegral height
           newlayout = case stack zoom of
             (t:_) -> transformLayout dwidth dheight t layout
             []    -> layout
-      putStrLn $ show zoom
       updateCanvas (toRenderable newlayout) canvas
 
     G.onButtonPress canvas (onButtonEvent zooms canvas)
@@ -120,34 +124,24 @@ createZoomableWindow layout windowWidth windowHeight = do
     G.set window [G.containerChild G.:= canvas]
     return window
 
--- | Transform the axis of the layout to cause the 'zoom' type effect
+-- Transform the axis of the layout to cause the 'zoom' type effect
 transformLayout :: Double -> Double -> Transform -> Layout x y -> Layout x y
-transformLayout windowwidth windowheight (Transform tx dx ty dy) l = let
-    leftmargin = 40.0
-    rightmargin = 12.0
-    topmargin = 40.0
-    bottommargin = 30.0
-    xscale = (windowwidth - leftmargin - rightmargin)/dx
-    yscale = (windowheight - topmargin - bottommargin)/dy
-    transx = if tx < leftmargin then 0.0 else tx - leftmargin
-    transy = if ty < topmargin then 0.0 else ty - topmargin
-    transformaxis :: Double -> Double -> AxisData x -> AxisData x
-    transformaxis t s ad =
-      let newviewport r x = (_axis_viewport ad r x - t) * s
-      in ad { _axis_viewport=newviewport }
+transformLayout windowwidth windowheight (tx, sx, ty, sy) l = let
+    transformaxis :: Double -> Double -> Double -> Double -> AxisData x -> AxisData x
+    transformaxis w offset t s ad =
+      let newviewport r x = (_axis_viewport ad r x - t * w + offset) * s
+      in ad { _axis_viewport = newviewport }
 
     oldxaxisfn = _laxis_override $ _layout_x_axis l
     oldyaxisfn = _laxis_override $ _layout_y_axis l
 
-    laxisx = (_layout_x_axis l) {_laxis_override = transformaxis transx xscale . oldxaxisfn }
-    laxisy = (_layout_y_axis l) {_laxis_override = transformaxis transy yscale . oldyaxisfn }
+    laxisx = (_layout_x_axis l) {_laxis_override = transformaxis windowwidth leftmargin tx sx . oldxaxisfn }
+    laxisy = (_layout_y_axis l) {_laxis_override = transformaxis windowheight topmargin ty sy . oldyaxisfn }
     newaxis = l{_layout_x_axis = laxisx, _layout_y_axis = laxisy}
 
     in newaxis
 
-data Transform = Transform Double Double Double Double
-                 deriving (Show)
-
+type Transform = (Double, Double, Double, Double)
 data ZoomState = ZoomState { press :: Maybe (Double,Double),
                              stack :: [Transform] } deriving (Show)
 initialZoom = ZoomState { press = Nothing, stack = [] }
@@ -155,33 +149,33 @@ initialZoom = ZoomState { press = Nothing, stack = [] }
 onButtonEvent :: IORef ZoomState -> G.DrawingArea -> GE.Event -> IO Bool
 onButtonEvent ref canvas (e@GE.Button{ GE.eventClick = GE.SingleClick,
                                    GE.eventButton = GE.LeftButton }) = do
-  putStrLn $ show e
-  bool <- onButtonPress ref (GE.eventX e) (GE.eventY e)
+  -- putStrLn $ show e
+  (w,h) <- dwidth canvas
+  modifyIORef ref $ \z -> z{ press = Just (restrictX w (GE.eventX e),restrictY h (GE.eventY e)) }
   G.widgetQueueDraw canvas
-  return bool
+  return True
 
 onButtonEvent ref canvas (e@GE.Button{ GE.eventClick = GE.ReleaseClick,
                                   GE.eventButton = GE.LeftButton }) = do
-  putStrLn $ show e
+  -- putStrLn $ show e
   state <- readIORef ref
-  putStrLn $ show state
+  -- putStrLn $ show state
   r <- onButtonRelease ref canvas (GE.eventX e) (GE.eventY e)
   G.widgetQueueDraw canvas
   return r
 
 onButtonEvent ref canvas (e@GE.Button{ GE.eventClick = GE.SingleClick,
                                        GE.eventButton = GE.RightButton }) = do
-  putStrLn $ show e
+  -- putStrLn $ show e
   popStack ref
   state <- readIORef ref
-  putStrLn $ show state
+  -- putStrLn $ show state
   G.widgetQueueDraw canvas
   return True
 
 onButtonEvent _ _ _ = return False
 
-onButtonPress ref x y = do
-  modifyIORef ref $ \z -> z{ press = Just (x,y) }
+onButtonPress ref width height x y = do
   return True
 
 popStack :: IORef ZoomState -> IO ()
@@ -189,19 +183,47 @@ popStack ref = modifyIORef ref go where
   go (z@ZoomState { stack=x:xs }) = z { stack = xs }
   go z = z
 
+-- | restricts the point on the canvas to the plot area
+restrictX width x | x < leftmargin          = leftmargin
+                  | x > width - rightmargin = width - rightmargin
+                  | otherwise               = x
+
+restrictY height y | y < topmargin             = topmargin
+                   | y > height - bottommargin = height - bottommargin
+                   | otherwise                 = y
+
+
+dwidth :: G.DrawingArea -> IO (Double, Double)
+dwidth canvas = do
+  (w, h) <- G.widgetGetSize canvas
+  return (fromIntegral w, fromIntegral h)
+
+
 onButtonRelease :: IORef ZoomState -> G.DrawingArea -> Double -> Double -> IO Bool
 onButtonRelease ref canvas x y = let
-    go (z@ZoomState{ press = Just (x',y'), stack =stack }) =
+    go width height (z@ZoomState{ press = Just (x',y'), stack =stack }) =
       z { press=Nothing, stack = stack' } where
-        stack' = if dx < 1.0 && dy < 1.0 then stack
-                 else t:stack
-                   where
-                     dx = abs (x-x')
-                     dy = abs (y-y')
-                     t = Transform (min x x') dx (min y y') dy
+        stack' = if dx < 1.0 && dy < 1.0 then stack else t:stack where
+                   x'' = restrictX width x
+                   y'' = restrictY height y
+                   dx = abs (x' - x'')
+                   dy = abs (y' - y'')
+                   tx = (min x' x'')/width
+                   ty = (min y' y'')/height
+                   sx = (width - leftmargin - rightmargin)/dx
+                   sy = (height - topmargin - bottommargin)/dy
 
-    go z = z -- Don't know what this is so we ignore it
-  in do {modifyIORef ref go; return True }
+                   (tx', sx', ty', sy') = case stack of
+                     (t:_) -> t
+                     _     -> (0, 1, 0, 1)
+
+                   t = (tx/sx'+tx', sx*sx', ty/sy'+ty', sy*sy')
+
+    go _ _ _ = initialZoom -- Don't know what this is so we revert to the default
+  in do
+    (dw, dh) <- dwidth canvas
+    modifyIORef ref $ go dw dh
+    return True
 
 updateCanvas :: Renderable a -> G.DrawingArea -> IO Bool
 updateCanvas chart canvas = do
