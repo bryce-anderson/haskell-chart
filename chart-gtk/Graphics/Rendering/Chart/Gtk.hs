@@ -34,8 +34,6 @@ import Data.Default.Class
 import Control.Monad(when)
 import System.IO.Unsafe(unsafePerformIO)
 
-import Debug.Trace
-
 
 -- | types associated with the zoom functionality
 type Transform = (Double, Double, Double, Double)
@@ -47,9 +45,6 @@ leftmargin = 40.0
 rightmargin = 12.0
 topmargin = 40.0
 bottommargin = 30.0
-
-buttonwidth = 50
-buttonheight = 30
 
 -- do action m for any keypress (except modified keys)
 anyKey :: (Monad m) => m a -> GE.Event -> m Bool
@@ -125,11 +120,12 @@ createZoomableWindow :: forall x y . (Ord x, Ord y, PlotValue x, PlotValue y)
 createZoomableWindow layout windowWidth windowHeight = do
     zooms <- newIORef $ initialZoom layout
     window <- G.windowNew
-    vbox <- G.vBoxNew False 2
-    G.widgetSetSizeRequest vbox (buttonwidth+windowWidth) (buttonheight+windowHeight)
+    vbox <- G.vBoxNew False 0
+    menu <- makeMenu window zooms
     canvas <- G.drawingAreaNew
-    hbox <- makeMenu window zooms
-    G.set vbox [G.containerChild G.:= hbox, G.containerChild G.:= canvas]
+    G.widgetSetSizeRequest canvas windowWidth windowHeight
+    G.boxPackStart vbox menu G.PackNatural 0
+    G.boxPackEnd vbox canvas G.PackGrow 0
     G.set window [G.containerChild G.:= vbox]
     G.widgetSetSizeRequest canvas windowWidth windowHeight
     G.onExpose canvas $ const $ do
@@ -146,17 +142,15 @@ createZoomableWindow layout windowWidth windowHeight = do
 makeMenu :: (PlotValue x, PlotValue y)
          => G.Window
          -> IORef (ZoomState x y)
-         -> IO G.HBox
+         -> IO G.MenuBar
 makeMenu window ref = do
-  hbox <- G.hBoxNew False 0
-  G.widgetSetSizeRequest hbox 0 buttonheight
-  align <- G.alignmentNew 0 0 0 1
-  saveButton <- G.buttonNewWithMnemonic "_Save"
-  G.widgetSetSizeRequest saveButton buttonwidth buttonheight
-  G.set align [G.containerChild G.:= saveButton]
-  G.set hbox [G.containerChild G.:= align]
-  G.onButtonPress saveButton $ const $ do
-    putStrLn "Save pressed!"
+  menuBar <- G.menuBarNew
+  filemenu <- G.menuItemNewWithMnemonic "_File"
+  G.set menuBar [G.containerChild G.:= filemenu]
+  menu <- G.menuNew
+  filemenu `G.menuItemSetSubmenu` menu
+  save <- G.menuItemNewWithMnemonic "_Save"
+  save `G.on` G.menuItemActivate $ do
     chooser <- FC.fileChooserDialogNew Nothing (Just window)
                           G.FileChooserActionSave
                           [("Save",G.ResponseAccept),("Cancel",G.ResponseCancel)]
@@ -169,21 +163,24 @@ makeMenu window ref = do
         case m of
           Nothing -> return ()
           Just p  -> do
-            ZoomState{ stack = t:_} <- readIORef ref
+            ZoomState { stack = t:_} <- readIORef ref
             renderableToFile def p (toRenderable t)
             return ()
+      _ -> return () -- shouldn't get here.
 
     G.widgetDestroy chooser
-    return True
 
-  return hbox
+  quit <- G.menuItemNewWithMnemonic "_Quit"
+  G.on quit G.menuItemActivate G.mainQuit
+  G.set menu [G.containerChild G.:= save, G.containerChild G.:= quit]
+
+  return menuBar
 
 -- | Transform the axis of the layout to cause the 'zoom' type effect
 transformLayout :: (PlotValue x, PlotValue y) => Transform -> Layout x y -> Layout x y
 transformLayout (p1x, p1y, p2x, p2y) l = let
     transformaxis p1 p2 ad =
       let
-        oldviewport = _axis_viewport ad
         oldtropweiv = _axis_tropweiv ad
 
         newviewport r x = vmap (xmin,xmax) r x where
@@ -220,12 +217,11 @@ onButtonEvent ref canvas (e@GE.Button{ GE.eventClick = GE.SingleClick,
 
 onButtonEvent ref canvas (e@GE.Button{ GE.eventClick = GE.ReleaseClick,
                                   GE.eventButton = GE.LeftButton }) = do
-  state <- readIORef ref
   r <- onButtonRelease ref canvas (GE.eventX e) (GE.eventY e)
   G.widgetQueueDraw canvas
   return r
 
-onButtonEvent ref canvas (e@GE.Button{ GE.eventClick = GE.SingleClick,
+onButtonEvent ref canvas (GE.Button{ GE.eventClick = GE.SingleClick,
                                        GE.eventButton = GE.RightButton }) = do
   state <- readIORef ref
   case stack state of
