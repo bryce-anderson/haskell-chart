@@ -37,8 +37,49 @@ import System.IO.Unsafe(unsafePerformIO)
 
 -- | types associated with the zoom functionality
 type Transform = (Double, Double, Double, Double)
-data ZoomState x y = ZoomState { press :: Maybe (Double,Double),
-                             stack :: [Layout x y]}
+data ZoomState z = Zoomable z => ZoomState { press :: Maybe (Double,Double)
+                                          , stack :: [z] }
+
+-- | class for the types of things that can be zoomed and rendered
+class ToRenderable z => Zoomable z where
+  transform :: Transform -> z -> z
+
+-- | transforms a LayoutAxis using the supplied device coordinates
+transformLayoutAxis :: PlotValue x => Range -> LayoutAxis x -> LayoutAxis x
+transformLayoutAxis (p1,p2) layoutaxis = let
+  transformaxis axisdata = let
+        oldtropweiv = _axis_tropweiv axisdata
+
+        newviewport r x = vmap (xmin,xmax) r x where
+          xmin = oldtropweiv r p1
+          xmax = oldtropweiv r p2
+
+        newtropweiv r d = invmap (xmin,xmax) r d where
+          xmin = oldtropweiv r p1
+          xmax = oldtropweiv r p2
+
+      in axisdata { _axis_viewport = newviewport
+                  , _axis_tropweiv = newtropweiv }
+
+  oldaxisfn = _laxis_override layoutaxis
+  in layoutaxis { _laxis_override = transformaxis . oldaxisfn }
+
+instance (PlotValue x, PlotValue y) => Zoomable (Layout x y) where
+  transform (p1x, p1y, p2x, p2y) l = newaxis where
+    laxisx = transformLayoutAxis (p1x,p2x) (_layout_x_axis l)
+    laxisy = transformLayoutAxis (p1y,p2y) (_layout_y_axis l)
+    newaxis = l{_layout_x_axis = laxisx, _layout_y_axis = laxisy}
+
+instance (PlotValue x, PlotValue y1, PlotValue y2) => Zoomable (LayoutLR x y1 y2) where
+  transform (p1x, p1y, p2x, p2y) lr = newaxis where
+    laxisx = transformLayoutAxis (p1x,p2x) (_layoutlr_x_axis lr)
+    laxisy1 = transformLayoutAxis (p1y,p2y) (_layoutlr_left_axis lr)
+    laxisy2 = transformLayoutAxis (p1y,p2y) (_layoutlr_right_axis lr)
+    newaxis = lr { _layoutlr_x_axis = laxisx
+                 , _layoutlr_left_axis = laxisy1
+                 , _layoutlr_right_axis = laxisy2 }
+
+
 
 -- | Some constants
 leftmargin = 40.0
@@ -94,11 +135,7 @@ toWindow :: (Default r, ToRenderable r) =>Int -> Int -> EC r () -> IO ()
 toWindow windowWidth windowHeight ec = renderableToWindow r windowWidth windowHeight where
                        r = toRenderable (execEC ec)
 
-toZoomableWindow :: forall x y . (Ord x, PlotValue x, Ord y, PlotValue y)
-                        => Int
-                        -> Int
-                        -> EC (Layout x y) ()
-                        -> IO ()
+toZoomableWindow :: (Default z, Zoomable z) => Int -> Int -> EC z () -> IO ()
 toZoomableWindow windowWidth windowHeight ec = makeWindow window where
   window = createZoomableWindow (execEC ec) windowWidth windowHeight
 
@@ -112,11 +149,7 @@ createRenderableWindow chart windowWidth windowHeight = do
     G.set window [G.containerChild G.:= canvas]
     return window
 
-createZoomableWindow :: forall x y . (Ord x, Ord y, PlotValue x, PlotValue y)
-                                 => Layout x y
-                                 -> Int
-                                 -> Int
-                                 -> IO G.Window
+createZoomableWindow :: Zoomable z => z -> Int -> Int -> IO G.Window
 createZoomableWindow layout windowWidth windowHeight = do
     zooms <- newIORef $ initialZoom layout
     window <- G.windowNew
@@ -139,9 +172,8 @@ createZoomableWindow layout windowWidth windowHeight = do
     G.onButtonRelease canvas (onButtonEvent zooms canvas)
     return window
 
-makeMenu :: (PlotValue x, PlotValue y)
-         => G.Window
-         -> IORef (ZoomState x y)
+makeMenu :: G.Window
+         -> IORef (ZoomState z)
          -> IO G.MenuBar
 makeMenu window ref = do
   menuBar <- G.menuBarNew
@@ -176,37 +208,10 @@ makeMenu window ref = do
 
   return menuBar
 
--- | Transform the axis of the layout to cause the 'zoom' type effect
-transformLayout :: (PlotValue x, PlotValue y) => Transform -> Layout x y -> Layout x y
-transformLayout (p1x, p1y, p2x, p2y) l = let
-    transformaxis p1 p2 ad =
-      let
-        oldtropweiv = _axis_tropweiv ad
-
-        newviewport r x = vmap (xmin,xmax) r x where
-          xmin = oldtropweiv r p1
-          xmax = oldtropweiv r p2
-
-        newtropweiv r d = invmap (xmin,xmax) r d where
-          xmin = oldtropweiv r p1
-          xmax = oldtropweiv r p2
-
-      in ad { _axis_viewport = newviewport
-            , _axis_tropweiv = newtropweiv }
-
-    oldxaxisfn = _laxis_override $ _layout_x_axis l
-    oldyaxisfn = _laxis_override $ _layout_y_axis l
-
-    laxisx = (_layout_x_axis l) {_laxis_override = transformaxis p1x p2x . oldxaxisfn }
-    laxisy = (_layout_y_axis l) {_laxis_override = transformaxis p1y p2y . oldyaxisfn }
-    newaxis = l{_layout_x_axis = laxisx, _layout_y_axis = laxisy}
-
-    in newaxis
-
 initialZoom l = ZoomState { press = Nothing, stack = [l] }
 
 -- Handles the button events
-onButtonEvent :: (PlotValue x, PlotValue y) => IORef (ZoomState x y) -> G.DrawingArea -> GE.Event -> IO Bool
+onButtonEvent :: IORef (ZoomState z) -> G.DrawingArea -> GE.Event -> IO Bool
 onButtonEvent ref canvas (e@GE.Button{ GE.eventClick = GE.SingleClick,
                                    GE.eventButton = GE.LeftButton }) = do
   -- putStrLn $ show e
@@ -251,11 +256,11 @@ dwidth canvas = do
   return (fromIntegral w, fromIntegral h)
 
 
-onButtonRelease :: (PlotValue x, PlotValue y) => IORef (ZoomState x y)
-                                             -> G.DrawingArea
-                                             -> Double
-                                             -> Double
-                                             -> IO Bool
+onButtonRelease :: IORef (ZoomState z)
+                    -> G.DrawingArea
+                    -> Double
+                    -> Double
+                    -> IO Bool
 onButtonRelease ref canvas x y = let
     go width height (z@ZoomState{ press = Just (x',y'), stack = stack@(t:_) }) =
       z { press=Nothing, stack = stack' } where
@@ -269,7 +274,7 @@ onButtonRelease ref canvas x y = let
                    p1y = (max y' y'') - topmargin
                    p2y = (min y' y'') - topmargin
 
-                   t' = transformLayout (p1x, p1y, p2x, p2y) t
+                   t' = transform (p1x, p1y, p2x, p2y) t
 
   in do
     (dw, dh) <- dwidth canvas
