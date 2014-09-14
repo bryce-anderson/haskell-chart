@@ -17,6 +17,7 @@ module Graphics.Rendering.Chart.Gtk(
 
 import qualified Graphics.UI.Gtk as G
 import qualified Graphics.UI.Gtk.Gdk.Events as GE
+import qualified Graphics.UI.Gtk.Selectors.FileChooserDialog as FC
 import qualified Graphics.Rendering.Cairo as C
 
 import Graphics.Rendering.Chart
@@ -46,6 +47,9 @@ leftmargin = 40.0
 rightmargin = 12.0
 topmargin = 40.0
 bottommargin = 30.0
+
+buttonwidth = 50
+buttonheight = 30
 
 -- do action m for any keypress (except modified keys)
 anyKey :: (Monad m) => m a -> GE.Event -> m Bool
@@ -119,10 +123,15 @@ createZoomableWindow :: forall x y . (Ord x, Ord y, PlotValue x, PlotValue y)
                                  -> Int
                                  -> IO G.Window
 createZoomableWindow layout windowWidth windowHeight = do
-    window <- G.windowNew
-    canvas <- G.drawingAreaNew
     zooms <- newIORef $ initialZoom layout
-    G.widgetSetSizeRequest window windowWidth windowHeight
+    window <- G.windowNew
+    vbox <- G.vBoxNew False 2
+    G.widgetSetSizeRequest vbox (buttonwidth+windowWidth) (buttonheight+windowHeight)
+    canvas <- G.drawingAreaNew
+    hbox <- makeMenu window zooms
+    G.set vbox [G.containerChild G.:= hbox, G.containerChild G.:= canvas]
+    G.set window [G.containerChild G.:= vbox]
+    G.widgetSetSizeRequest canvas windowWidth windowHeight
     G.onExpose canvas $ const $ do
       zoom <- readIORef zooms
       let l = case stack zoom of
@@ -132,8 +141,42 @@ createZoomableWindow layout windowWidth windowHeight = do
 
     G.onButtonPress canvas (onButtonEvent zooms canvas)
     G.onButtonRelease canvas (onButtonEvent zooms canvas)
-    G.set window [G.containerChild G.:= canvas]
     return window
+
+makeMenu :: (PlotValue x, PlotValue y)
+         => G.Window
+         -> IORef (ZoomState x y)
+         -> IO G.HBox
+makeMenu window ref = do
+  hbox <- G.hBoxNew False 0
+  G.widgetSetSizeRequest hbox 0 buttonheight
+  align <- G.alignmentNew 0 0 0 1
+  saveButton <- G.buttonNewWithMnemonic "_Save"
+  G.widgetSetSizeRequest saveButton buttonwidth buttonheight
+  G.set align [G.containerChild G.:= saveButton]
+  G.set hbox [G.containerChild G.:= align]
+  G.onButtonPress saveButton $ const $ do
+    putStrLn "Save pressed!"
+    chooser <- FC.fileChooserDialogNew Nothing (Just window)
+                          G.FileChooserActionSave
+                          [("Save",G.ResponseAccept),("Cancel",G.ResponseCancel)]
+    G.fileChooserSetDoOverwriteConfirmation chooser True
+    result <- G.dialogRun chooser
+    case result of
+      G.ResponseCancel -> return ()
+      G.ResponseAccept -> do
+        m <- G.fileChooserGetFilename chooser
+        case m of
+          Nothing -> return ()
+          Just p  -> do
+            ZoomState{ stack = t:_} <- readIORef ref
+            renderableToFile def p (toRenderable t)
+            return ()
+
+    G.widgetDestroy chooser
+    return True
+
+  return hbox
 
 -- | Transform the axis of the layout to cause the 'zoom' type effect
 transformLayout :: (PlotValue x, PlotValue y) => Transform -> Layout x y -> Layout x y
