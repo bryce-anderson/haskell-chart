@@ -41,31 +41,6 @@ data PanState = PanState Range (Maybe Range)
 -- | transform that defines the normalized axis transform
 type AxisTransform = (Double,Double)
 
-transformAxis :: PlotValue x => AxisTransform -> LayoutAxis x -> LayoutAxis x
-transformAxis (nl,nr) axis = let
-    rml = nr - nl
-    invrml = 1/rml
-
-    transforward (dl,dr) = (dl',dr') where
-      w = dr - dl
-      w' = w*invrml
-      dl' = dl - w'*nl
-      dr' = dl' + w'
-
-    transformback (dl',dr') = (dl,dr) where
-      w' = dr' - dl'
-      w = w' * rml
-      dl = dl' + w'*nl
-      dr = dl + w
-
-    override ax = let
-        new_viewport r x = _axis_viewport ax (transforward r) x
-        new_tropweiv r d = _axis_tropweiv ax (transformback r) d
-      in ax { _axis_viewport = new_viewport
-            , _axis_tropweiv = new_tropweiv }
-
-  in axis { _laxis_override = override . (_laxis_override axis) }
-
 data ZoomState z = Zoomable z => ZoomState { press :: Maybe (Double,Double)
                                           , mouse_drag :: Maybe (Double, Double)
                                           , panstate :: PanState
@@ -98,6 +73,32 @@ leftmargin = 39.0
 rightmargin = 16.0
 topmargin = 38.0
 bottommargin = 54.0
+
+transformAxis :: PlotValue x => AxisTransform -> LayoutAxis x -> LayoutAxis x
+transformAxis (nl,nr) axis = let
+    rml = nr - nl
+    invrml = 1/rml
+
+    transforward (dl,dr) = (dl',dr') where
+      w = dr - dl
+      w' = w*invrml
+      dl' = dl - w'*nl
+      dr' = dl' + w'
+
+    transformback (dl',dr') = (dl,dr) where
+      w' = dr' - dl'
+      w = w' * rml
+      dl = dl' + w'*nl
+      dr = dl + w
+
+    override ax = let
+        new_viewport r x = _axis_viewport ax (transforward r) x
+        new_tropweiv r d = _axis_tropweiv ax (transformback r) d
+      in ax { _axis_viewport = new_viewport
+            , _axis_tropweiv = new_tropweiv }
+
+  in axis { _laxis_override = override . (_laxis_override axis) }
+
 
 -- do action m for any keypress (except modified keys)
 anyKey :: (Monad m) => m a -> GE.Event -> m Bool
@@ -162,8 +163,8 @@ createRenderableWindow chart windowWidth windowHeight = do
     return window
 
 createZoomableWindow :: Zoomable z => z -> Int -> Int -> IO G.Window
-createZoomableWindow layout windowWidth windowHeight = do
-    zooms <- newIORef $ initialZoom layout
+createZoomableWindow z windowWidth windowHeight = do
+    zooms <- newIORef $ initialZoom z
     window <- G.windowNew
     vbox <- G.vBoxNew False 0
     menu <- makeMenu window zooms
@@ -176,17 +177,17 @@ createZoomableWindow layout windowWidth windowHeight = do
     G.onExpose canvas $ const $ do
       zoom <- readIORef zooms
       (w,h) <- dwidth canvas
-      let l = case stack zoom of
-            (t:_) -> t
-            []    -> layout
-          l' = case panstate zoom of
-            PanState(0,0) _ -> l
-            PanState(px,py) _ -> l' where
-              l' = transform (nx,1+nx) (ny,1+ny) l
+      let zz = case stack zoom of
+            (z':_) -> z'
+            []    -> z
+          z' = case panstate zoom of
+            PanState(0,0) _ -> zz
+            PanState(px,py) _ -> z' where
+              z' = transform (nx,1+nx) (ny,1+ny) z
               nx = -px/w
               ny =  py/h -- Axis already flipped
 
-      _updateCanvas False (toRenderable l') canvas
+      _updateCanvas False (toRenderable z') canvas
       drawMouseBox zoom canvas
       G.widgetGetDrawWindow canvas >>= G.drawWindowEndPaint -- manually finish canvas
       return True
