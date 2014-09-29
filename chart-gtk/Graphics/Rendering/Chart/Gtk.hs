@@ -29,7 +29,6 @@ import Graphics.Rendering.Chart.Drawing
 import Graphics.Rendering.Chart.Backend.Cairo
 import Graphics.Rendering.Chart.State(EC, execEC)
 
-import Data.List (isPrefixOf)
 import Data.IORef
 import Data.Default.Class
 
@@ -37,40 +36,33 @@ import Control.Monad(when)
 import System.IO.Unsafe(unsafePerformIO)
 
 
-data PanState = PanState Double Double (Maybe (Double, Double))
-
--- | types associated with the zoom functionality
-type Transform = (Double, Double, Double, Double)
+data PanState = PanState (Double,Double) (Maybe (Double, Double))
 
 -- | transform that defines the normalized axis transform
 type AxisTransform = (Double,Double)
 
 transformAxis :: PlotValue x => AxisTransform -> LayoutAxis x -> LayoutAxis x
 transformAxis (nl,nr) axis = let
-
     rml = nr - nl
     invrml = 1/rml
 
-    transforward :: Range -> Range
     transforward (dl,dr) = (dl',dr') where
       w = dr - dl
       w' = w*invrml
-      dl' = dl-w*nl
+      dl' = dl - w'*nl
       dr' = dl' + w'
 
-    transformback :: Range -> Range
     transformback (dl',dr') = (dl,dr) where
       w' = dr' - dl'
       w = w' * rml
       dl = dl' + w'*nl
       dr = dl + w
 
-    override :: AxisData x -> AxisData x
     override ax = let
         new_viewport r x = _axis_viewport ax (transforward r) x
         new_tropweiv r d = _axis_tropweiv ax (transformback r) d
       in ax { _axis_viewport = new_viewport
-          , _axis_tropweiv = new_tropweiv }
+            , _axis_tropweiv = new_tropweiv }
 
   in axis { _laxis_override = override . (_laxis_override axis) }
 
@@ -81,59 +73,31 @@ data ZoomState z = Zoomable z => ZoomState { press :: Maybe (Double,Double)
 
 -- | class for the types of things that can be zoomed and rendered
 class ToRenderable z => Zoomable z where
-  transform :: Transform -> z -> z
-
--- | transforms a LayoutAxis using the supplied device coordinates
-transformLayoutAxis :: PlotValue x => Range -> LayoutAxis x -> LayoutAxis x
-transformLayoutAxis (p1,p2) layoutaxis = let
-  transformaxis axisdata = let
-        oldtropweiv = _axis_tropweiv axisdata
-
-        newviewport r x = vmap (xmin,xmax) r x where
-          xmin = oldtropweiv r p1
-          xmax = oldtropweiv r p2
-
-        newtropweiv r d = invmap (xmin,xmax) r d where
-          xmin = oldtropweiv r p1
-          xmax = oldtropweiv r p2
-
-        (ticks,labels) = tandl where
-          pts = map (\(x,_) -> x) $ _axis_ticks axisdata
-          axis' = _laxis_generate layoutaxis pts
-          tandl = (_axis_ticks axis', _axis_labels axis')
-
-
-      in axisdata { _axis_viewport = newviewport
-                  , _axis_tropweiv = newtropweiv }
-                  --, _axis_ticks    = ticks
-                  --, _axis_labels   = labels }
-
-  oldaxisfn = _laxis_override layoutaxis
-  in layoutaxis { _laxis_override = transformaxis . oldaxisfn }
+  transform :: AxisTransform -> AxisTransform -> z -> z
 
 instance (PlotValue x, PlotValue y) => Zoomable (Layout x y) where
-  transform (p1x, p1y, p2x, p2y) l = newaxis where
-    laxisx = transformLayoutAxis (p1x,p2x) (_layout_x_axis l)
-    laxisy = transformLayoutAxis (p1y,p2y) (_layout_y_axis l)
-    newaxis = l {_layout_x_axis = laxisx, _layout_y_axis = laxisy}
+  transform (p1x, p2x) (p1y,p2y) l = newaxis where
+    laxisx = transformAxis (p1x,p2x) (_layout_x_axis l)
+    laxisy = transformAxis (p1y,p2y) (_layout_y_axis l)
+    newaxis = l {_layout_x_axis = laxisx
+                , _layout_y_axis = laxisy }
 
 instance (PlotValue x, PlotValue y1, PlotValue y2) => Zoomable (LayoutLR x y1 y2) where
-  transform (p1x, p1y, p2x, p2y) lr = newaxis where
-    laxisx = transformLayoutAxis (p1x,p2x) (_layoutlr_x_axis lr)
-    laxisy1 = transformLayoutAxis (p1y,p2y) (_layoutlr_left_axis lr)
-    laxisy2 = transformLayoutAxis (p1y,p2y) (_layoutlr_right_axis lr)
+  transform (p1x,p2x) (p1y,p2y) lr = newaxis where
+    laxisx = transformAxis (p1x,p2x) (_layoutlr_x_axis lr)
+    laxisy1 = transformAxis (p1y,p2y) (_layoutlr_left_axis lr)
+    laxisy2 = transformAxis (p1y,p2y) (_layoutlr_right_axis lr)
     newaxis = lr { _layoutlr_x_axis = laxisx
                  , _layoutlr_left_axis = laxisy1
                  , _layoutlr_right_axis = laxisy2 }
 
 
-
--- | Some constants
+-- | Some constants TODO: these may not actually be 'constant'
 leftmargin, rightmargin, topmargin, bottommargin :: Double
-leftmargin = 40.0
-rightmargin = 12.0
-topmargin = 40.0
-bottommargin = 30.0
+leftmargin = 39.0
+rightmargin = 16.0
+topmargin = 38.0
+bottommargin = 54.0
 
 -- do action m for any keypress (except modified keys)
 anyKey :: (Monad m) => m a -> GE.Event -> m Bool
@@ -251,12 +215,13 @@ mouseMotion zooms canvas GE.Motion { GE.eventX = x, GE.eventY = y} = do
   zoom <- readIORef zooms
   case (press zoom, panstate zoom) of
     (Just _, _) -> do
-      writeIORef zooms zoom { mouse_drag = Just (x, y) }
+      (w,h) <- dwidth canvas
+      writeIORef zooms zoom { mouse_drag = Just (restrictX w x, restrictY h y) }
       G.widgetQueueDraw canvas
       return True
 
-    (_, PanState dx dy (Just (lx, ly))) -> do
-      writeIORef zooms zoom { panstate = PanState (dx+x-lx) (dy+y-ly) (Just (x,y)) }
+    (_, PanState (dx,dy) (Just (lx, ly))) -> do
+      writeIORef zooms zoom { panstate = PanState (dx+x-lx,dy+y-ly) (Just (x,y)) }
       G.widgetQueueDraw canvas
       return True
 
@@ -298,7 +263,7 @@ makeMenu window ref = do
 
 initialZoom l = ZoomState { press = Nothing
                           , mouse_drag = Nothing
-                          , panstate = PanState 0 0 Nothing
+                          , panstate = PanState (0,0) Nothing
                           , stack = [l] }
 
 -- Handles the button events
@@ -312,7 +277,8 @@ onButtonEvent ref canvas (e@GE.Button { GE.eventClick = GE.SingleClick,
 
 onButtonEvent ref canvas (e@GE.Button { GE.eventClick = GE.ReleaseClick,
                                         GE.eventButton = GE.LeftButton }) = do
-  r <- onButtonRelease ref canvas (GE.eventX e) (GE.eventY e)
+  (w,h) <- dwidth canvas
+  r <- onButtonRelease ref canvas (restrictX w (GE.eventX e), restrictY h (GE.eventY e))
   G.widgetQueueDraw canvas
   return r
 
@@ -333,14 +299,14 @@ onButtonEvent ref canvas (e@GE.Button { GE.eventClick = GE.SingleClick,
   let x = restrictX w (GE.eventX e)
       y = restrictY h (GE.eventY e)
   modifyIORef ref $ \z -> case panstate z of
-   PanState dx dy _ -> z { panstate = PanState dx dy (Just (x,y)) }
+   PanState p _ -> z { panstate = PanState p (Just (x,y)) }
   return True
 
 -- | Pan release
 onButtonEvent ref _ (GE.Button{ GE.eventClick = GE.ReleaseClick,
                                        GE.eventButton = GE.MiddleButton }) = do
   modifyIORef ref $ \z -> case panstate z of
-   PanState dx dy _ -> z { panstate = PanState dx dy Nothing }
+   PanState p _ -> z { panstate = PanState p Nothing }
   return True
 
 
@@ -367,23 +333,22 @@ dwidth canvas = do
 
 onButtonRelease :: IORef (ZoomState z)
                     -> G.DrawingArea
-                    -> Double
-                    -> Double
+                    -> Range
                     -> IO Bool
-onButtonRelease ref canvas x y = let
+onButtonRelease ref canvas (x,y) = let
     go (width,height) (z@ZoomState{ press = Just (x',y'), stack = stack@(t:_) }) =
       z { press=Nothing, mouse_drag=Nothing, stack = stack' } where
         stack' = if dx < 1.0 && dy < 1.0 then stack else t':stack where
-                   x'' = restrictX width x
-                   y'' = restrictY height y
-                   dx = abs (x' - x'')
-                   dy = abs (y' - y'')
-                   p1x = (min x' x'') - leftmargin
-                   p2x = (max x' x'') - leftmargin
-                   p1y = (max y' y'') - topmargin
-                   p2y = (min y' y'') - topmargin
+                   dx = abs (x - x')
+                   dy = abs (y - y')
+                   invwidth = 1/(width-leftmargin-rightmargin)
+                   invheight = 1/(height-bottommargin-topmargin)
+                   p1x = (min x x' - leftmargin)*invwidth
+                   p2x = (max x x' - leftmargin)*invwidth
+                   p2y = 1 - (min y y' - topmargin)*invheight
+                   p1y = 1 - (max y y' - topmargin)*invheight
 
-                   t' = transform (p1x, p1y, p2x, p2y) t
+                   t' = transform (p1x,p2x) (p1y,p2y) t
 
   in do
     wh <- dwidth canvas
@@ -404,3 +369,4 @@ _updateCanvas finish chart canvas = do
     if finish
       then G.drawWindowEndPaint win >> return True
       else return True
+
