@@ -36,7 +36,7 @@ import Control.Monad(when)
 import System.IO.Unsafe(unsafePerformIO)
 
 
-data PanState = PanState (Double,Double) (Maybe (Double, Double))
+data PanState = PanState Range (Maybe Range)
 
 -- | transform that defines the normalized axis transform
 type AxisTransform = (Double,Double)
@@ -175,10 +175,18 @@ createZoomableWindow layout windowWidth windowHeight = do
     G.widgetSetSizeRequest canvas windowWidth windowHeight
     G.onExpose canvas $ const $ do
       zoom <- readIORef zooms
+      (w,h) <- dwidth canvas
       let l = case stack zoom of
             (t:_) -> t
             []    -> layout
-      _updateCanvas False (toRenderable l) canvas
+          l' = case panstate zoom of
+            PanState(0,0) _ -> l
+            PanState(px,py) _ -> l' where
+              l' = transform (nx,1+nx) (ny,1+ny) l
+              nx = -px/w
+              ny =  py/h -- Axis already flipped
+
+      _updateCanvas False (toRenderable l') canvas
       drawMouseBox zoom canvas
       G.widgetGetDrawWindow canvas >>= G.drawWindowEndPaint -- manually finish canvas
       return True
@@ -309,8 +317,7 @@ onButtonEvent ref _ (GE.Button{ GE.eventClick = GE.ReleaseClick,
    PanState p _ -> z { panstate = PanState p Nothing }
   return True
 
-
-
+-- | Other mouse events
 onButtonEvent _ _ _ = return False
 -- End of button events
 
@@ -336,19 +343,23 @@ onButtonRelease :: IORef (ZoomState z)
                     -> Range
                     -> IO Bool
 onButtonRelease ref canvas (x,y) = let
-    go (width,height) (z@ZoomState{ press = Just (x',y'), stack = stack@(t:_) }) =
-      z { press=Nothing, mouse_drag=Nothing, stack = stack' } where
-        stack' = if dx < 1.0 && dy < 1.0 then stack else t':stack where
-                   dx = abs (x - x')
-                   dy = abs (y - y')
-                   invwidth = 1/(width-leftmargin-rightmargin)
-                   invheight = 1/(height-bottommargin-topmargin)
-                   p1x = (min x x' - leftmargin)*invwidth
-                   p2x = (max x x' - leftmargin)*invwidth
-                   p2y = 1 - (min y y' - topmargin)*invheight
-                   p1y = 1 - (max y y' - topmargin)*invheight
-
-                   t' = transform (p1x,p2x) (p1y,p2y) t
+    go (width,height) (z@ZoomState{ press = Just (x',y')
+                                  , panstate = PanState (px,py) _
+                                  , stack = stack@(t:_) }) = z' where
+        z' = z { press = Nothing
+               , mouse_drag = Nothing
+               , panstate = PanState (0,0) Nothing
+               , stack = stack' }
+        stack' = if dx < 1.0 && dy < 1.0 then stack else t':stack
+        dx = abs (x - x')
+        dy = abs (y - y')
+        t' = transform (p1x,p2x) (p1y,p2y) t
+        width' = width-leftmargin-rightmargin
+        height' = height-bottommargin-topmargin
+        p1x = (min x x' - leftmargin - px)/width'
+        p2x = (max x x' - leftmargin - px)/width'
+        p2y = 1 - (min y y' - topmargin - py)/height'
+        p1y = 1 - (max y y' - topmargin - py)/height'
 
   in do
     wh <- dwidth canvas
