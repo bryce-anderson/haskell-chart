@@ -35,7 +35,7 @@ import Data.Default.Class
 import Control.Monad(when)
 import System.IO.Unsafe(unsafePerformIO)
 
-data PanState = PanState Range (Maybe Range)
+data PanState = PanState AxisTransform (Maybe Range)
 
 -- | transform that defines the normalized axis transform
 type AxisTransform = (Double,Double)
@@ -50,22 +50,20 @@ type ZoomStack = [ZoomState]
 
 zoomZero :: ZoomState
 zoomZero = ZoomState { press = Nothing
-                         , mouse_drag = Nothing
-                         , panstate = PanState (0,0) Nothing
-                         , xrange = (0,1)
-                         , yrange = (0,1) }
+                     , mouse_drag = Nothing
+                     , panstate = PanState (0,0) Nothing
+                     , xrange = (0,1)
+                     , yrange = (0,1) }
 
 
-zoomTransform :: Zoomable z => Range -> ZoomStack -> z -> z
-zoomTransform (width,height) zs z = z' where
+zoomTransform :: Zoomable z => ZoomStack -> z -> z
+zoomTransform zs z = z' where
   z' = case (getPan zs, getXrange zs, getYrange zs) of
      (PanState (0,0) _, (0,1), (0,1)) -> z
      (PanState (px,py) _,xr, yr) -> z' where
           z' = transform xr' yr' z
-          xr' = propagate xr (nx,1+nx)
-          yr' = propagate yr (ny,1+ny)
-          nx = -px/width
-          ny =  py/height -- Axis already flipped
+          xr' = propagate xr (px,1+px)
+          yr' = propagate yr (py,1+py)
 
 -- | Remove a zoom from the stack
 popZoom :: ZoomStack -> ZoomStack
@@ -131,11 +129,13 @@ instance (PlotValue x, PlotValue y1, PlotValue y2) => Zoomable (LayoutLR x y1 y2
 
 -- | Some constants TODO: these may not actually be 'constant'
 leftmargin, rightmargin, topmargin, bottommargin :: Double
-leftmargin = 39.0
-rightmargin = 16.0
-topmargin = 38.0
-bottommargin = 54.0
+leftmargin   = 39
+rightmargin  = 16
+topmargin    = 38
+bottommargin = 54
 
+-- | Transform the apparent device coordinates based on the normalized
+-- view encoded by the AxisTransform pair
 transformAxis :: PlotValue x => AxisTransform -> LayoutAxis x -> LayoutAxis x
 transformAxis (nl,nr) axis = let
     rml = nr - nl
@@ -238,8 +238,7 @@ createZoomableWindow z windowWidth windowHeight = do
     G.widgetSetSizeRequest canvas windowWidth windowHeight
     G.onExpose canvas $ const $ do
       zs <- readIORef zooms
-      devsize <- dwidth canvas
-      let r = toRenderable $ zoomTransform devsize zs z
+      let r = toRenderable $ zoomTransform zs z
       _updateCanvas False r canvas
       drawMouseBox zs canvas
       G.widgetGetDrawWindow canvas >>= G.drawWindowEndPaint -- manually finish canvas
@@ -283,7 +282,10 @@ mouseMotion zooms canvas GE.Motion { GE.eventX = x, GE.eventY = y} = do
       return True
 
     (_, PanState (dx,dy) (Just (lx, ly))) -> do
-      writeIORef zooms $ setPan (PanState (dx+x-lx,dy+y-ly) (Just (x,y))) zs
+      (w,h) <- dwidth canvas
+      let dx' = dx-(x-lx)/w
+          dy' = dy+(y-ly)/h -- the axis device coords are flipped
+      writeIORef zooms $ setPan (PanState (dx',dy') (Just (x,y))) zs
       G.widgetQueueDraw canvas
       return True
 
@@ -311,8 +313,7 @@ makeMenu window canvas ref z = do
           Nothing -> return ()
           Just p  -> do
             zs <- readIORef ref
-            devsize <- dwidth canvas
-            renderableToFile def p $ toRenderable $ zoomTransform devsize zs z
+            renderableToFile def p $ toRenderable $ zoomTransform zs z
             return ()
       _ -> return () -- shouldn't get here.
 
@@ -385,7 +386,7 @@ dwidth canvas = do
 
 -- | Propegates the scale if the system has already been scaled
 propagate :: AxisTransform -> AxisTransform -> AxisTransform
-propagate (a,b) (a',b') = (a'',b'') where -- undefined
+propagate (a,b) (a',b') = (a'',b'') where
   a'' = a + a'*w
   b'' = a + b'*w
   w = b - a
@@ -408,10 +409,10 @@ onButtonRelease ref canvas (x,y) = let
         dy = abs (y - y')
         width' = width-leftmargin-rightmargin
         height' = height-bottommargin-topmargin
-        p1x = (min x x' - leftmargin - px)/width'
-        p2x = (max x x' - leftmargin - px)/width'
-        p2y = 1 - (min y y' - topmargin - py)/height'
-        p1y = 1 - (max y y' - topmargin - py)/height'
+        p1x = (min x x' - leftmargin)/width' + px
+        p2x = (max x x' - leftmargin)/width' + px
+        p2y = 1 - (min y y' - topmargin)/height' + py
+        p1y = 1 - (max y y' - topmargin)/height' + py
 
   in do
     wh <- dwidth canvas
