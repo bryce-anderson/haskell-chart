@@ -18,6 +18,7 @@ module Graphics.Rendering.Chart.Axis.Floating(
     LogAxisParams(..),
     scaledAxis,
     autoScaledAxis,
+    scaledLogAxis,
     autoScaledLogAxis,
     autoSteps,
 
@@ -42,9 +43,10 @@ import Graphics.Rendering.Chart.Axis.Types
 -- to avoid -Wall 'defaulting to Integer' messages.
 
 instance PlotValue Double where
-    toValue  = id
-    fromValue= id
-    autoAxis = autoScaledAxis def
+    toValue    = id
+    fromValue  = id
+    autoAxis   = autoScaledAxis def
+    rangedAxis = scaledAxis def
 
 -- | A wrapper class for doubles used to indicate they are to
 -- be plotted against a percentage axis.
@@ -58,6 +60,7 @@ instance PlotValue Percent where
     toValue  = unPercent
     fromValue= Percent
     autoAxis = autoScaledAxis def {-_la_labelf=-}
+    rangedAxis = scaledAxis def
 
 -- | A wrapper class for doubles used to indicate they are to
 -- be plotted against a log axis.
@@ -71,6 +74,7 @@ instance PlotValue LogValue where
     toValue (LogValue x) = log x
     fromValue d          = LogValue (exp d)
     autoAxis             = autoScaledLogAxis def
+    rangedAxis           = scaledLogAxis def
 
 showD :: (RealFloat d) => d -> String
 showD x = case reverse $ showFFloat Nothing x "" of
@@ -89,19 +93,17 @@ data LinearAxisParams a = LinearAxisParams {
 }
 
 instance (Show a, RealFloat a) => Default (LinearAxisParams a) where
-  def = LinearAxisParams 
+  def = LinearAxisParams
     { _la_labelf    = showD
     , _la_nLabels   = 5
     , _la_nTicks    = 50
     }
 
 -- | Generate a linear axis with the specified bounds
-scaledAxis :: RealFloat a => LinearAxisParams a -> (a,a) -> AxisFn a
-scaledAxis lap rs@(minV,maxV) ps0 = makeAxis' realToFrac realToFrac
+scaledAxis :: RealFloat a => LinearAxisParams a -> (a,a) -> AxisData a
+scaledAxis lap rs@(minV,maxV) = makeAxis' realToFrac realToFrac
                                          (_la_labelf lap) (labelvs,tickvs,gridvs)
   where
-    ps        = filter isValidNumber ps0
-    range []  = (0,1)
     range _   | minV == maxV = if minV==0 then (-1,1) else
                                let d = abs (minV * 0.01) in (minV-d,maxV+d)
               | otherwise    = rs
@@ -109,12 +111,12 @@ scaledAxis lap rs@(minV,maxV) ps0 = makeAxis' realToFrac realToFrac
     tickvs    = map fromRational $ steps (fromIntegral (_la_nTicks lap))
                                          (minimum labelvs,maximum labelvs)
     gridvs    = labelvs
-    r         = range ps
+    r         = range rs
 
 -- | Generate a linear axis automatically, scaled appropriately for the
 -- input data.
 autoScaledAxis :: RealFloat a => LinearAxisParams a -> AxisFn a
-autoScaledAxis lap ps0 = scaledAxis lap rs ps0
+autoScaledAxis lap ps0 = scaledAxis lap rs
   where
     rs = (minimum ps0,maximum ps0)
 
@@ -150,24 +152,28 @@ autoSteps nSteps vs = map fromRational $ steps (fromIntegral nSteps) r
 ----------------------------------------------------------------------
 
 instance (Show a, RealFloat a) => Default (LogAxisParams a) where
-  def = LogAxisParams 
+  def = LogAxisParams
     { _loga_labelf = showD
     }
 
 -- | Generate a log axis automatically, scaled appropriate for the
 -- input data.
 autoScaledLogAxis :: RealFloat a => LogAxisParams a -> AxisFn a
-autoScaledLogAxis lap ps0 =
+autoScaledLogAxis lap ps0 = scaledLogAxis lap r
+        where
+          r = (minimum ps0,maximum ps0)
+
+-- | Generate a log axis automatically, scaled appropriate for the
+-- input data.
+scaledLogAxis :: RealFloat a => LogAxisParams a -> (a,a) -> AxisData a
+scaledLogAxis lap (minV,maxV) =
     makeAxis' (realToFrac . log) (realToFrac . exp)
               (_loga_labelf lap) (wrap rlabelvs, wrap rtickvs, wrap rgridvs)
         where
-          ps        = filter (\x -> isValidNumber x && 0 < x) ps0
-          (minV,maxV) = (minimum ps,maximum ps)
           wrap      = map fromRational
-          range []  = (3,30)
-          range _   | minV == maxV = (realToFrac $ minV/3, realToFrac $ maxV*3)
-                    | otherwise    = (realToFrac $ minV,   realToFrac $ maxV)
-          (rlabelvs, rtickvs, rgridvs) = logTicks (range ps)
+          range | minV == maxV = (realToFrac $ minV/3, realToFrac $ maxV*3)
+                | otherwise    = (realToFrac $ minV,   realToFrac $ maxV)
+          (rlabelvs, rtickvs, rgridvs) = logTicks range
 
 
 data LogAxisParams a = LogAxisParams {
@@ -200,17 +206,17 @@ logTicks (low,high) = (major,minor,major)
                maximum (1:filter (\x -> log10 (fromRational x) <= r) l)*10^^i
   upper a l  = let (i,r) = pf (log10 a) in
                minimum (10:filter (\x -> r <= log10 (fromRational x)) l)*10^^i
-               
+
   powers           :: (Double,Double) -> [Rational] -> [Rational]
   powers (x,y) l    = [ a*10^^p | p <- [(floor (log10 x))..(ceiling (log10 y))] :: [Integer]
                                 , a <- l ]
   midselection r l  = filter (inRange r l) (powers r l)
   inRange (a,b) l x = (lower a l <= x) && (x <= upper b l)
-  
+
   logRange = (log10 low, log10 high)
-  
+
   roundPow x = 10^^(round x :: Integer)
-  
+
   major | 17.5 < log10 ratio = map roundPow $
                                steps (min 5 (log10 ratio)) logRange
         | 12 < log10 ratio   = map roundPow $
@@ -227,8 +233,8 @@ logTicks (low,high) = (major,minor,major)
   (dl',dh') = (fromRational l', fromRational h')
   ratio' :: Double
   ratio' = fromRational (h'/l')
-  filterX = filter (\x -> l'<=x && x <=h') . powers (dl',dh') 
-  
+  filterX = filter (\x -> l'<=x && x <=h') . powers (dl',dh')
+
   minor | 50 < log10 ratio' = map roundPow $
                               steps 50 (log10 dl', log10 dh')
         | 6 < log10 ratio'  = filterX [1,10]

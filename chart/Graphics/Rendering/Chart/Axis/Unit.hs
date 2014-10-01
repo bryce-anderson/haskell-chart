@@ -18,12 +18,13 @@ instance PlotValue () where
     toValue () = 0
     fromValue  = const ()
     autoAxis   = const unitAxis
+    rangedAxis = const unitAxis
 
 unitAxis :: AxisData ()
 unitAxis = AxisData {
-    _axis_visibility = def 
+    _axis_visibility = def
                      { _axis_show_ticks  = False
-                     , _axis_show_labels = False 
+                     , _axis_show_labels = False
                      },
     _axis_viewport = \(x0,x1) _ -> (x0+x1)/2,
     _axis_tropweiv = \_       _ -> (),

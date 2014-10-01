@@ -37,7 +37,7 @@ module Graphics.Rendering.Chart.Axis.Types(
     axisGridAtLabels,
     axisGridHide,
     axisLabelsOverride,
-    
+
     axis_show_line,
     axis_show_ticks,
     axis_show_labels,
@@ -73,13 +73,14 @@ class Ord a => PlotValue a where
     toValue  :: a -> Double
     fromValue:: Double -> a
     autoAxis :: AxisFn a
+    rangedAxis :: (a,a) -> AxisData a
 
 -- | Configures whick visual elements of a axis are shown at the
 --   appropriate edge of a plot area.
 data AxisVisibility = AxisVisibility
   { -- | Whether to display a line along the axis.
     _axis_show_line :: Bool
-    
+
     -- | Whether to display the tick marks.
   , _axis_show_ticks :: Bool
 
@@ -89,10 +90,10 @@ data AxisVisibility = AxisVisibility
 
 -- | The basic data associated with an axis showing values of type x.
 data AxisData x = AxisData {
-    
+
     -- | Which parts of the axis shall be displayed.
     _axis_visibility :: AxisVisibility,
-    
+
     -- | The _axis_viewport function maps values into device coordinates.
     _axis_viewport :: Range -> x -> Double,
 
@@ -232,14 +233,14 @@ renderAxis :: AxisT x -> RectSize -> ChartBackend (PickFn x)
 renderAxis at@(AxisT et as _ ad) sz = do
   let ls = _axis_line_style as
       vis = _axis_visibility ad
-  when (_axis_show_line vis) $ 
+  when (_axis_show_line vis) $
     withLineStyle (ls {_line_cap = LineCapSquare}) $ do
       p <- alignStrokePoints [Point sx sy,Point ex ey]
       strokePointPath p
-  when (_axis_show_ticks vis) $ 
-    withLineStyle (ls {_line_cap = LineCapButt}) $ 
+  when (_axis_show_ticks vis) $
+    withLineStyle (ls {_line_cap = LineCapButt}) $
       mapM_ drawTick (_axis_ticks ad)
-  when (_axis_show_labels vis) $ 
+  when (_axis_show_labels vis) $
     withFontStyle (_axis_label_style as) $ do
       labelSizes <- mapM (mapM textDimension) (labelTexts ad)
       let sizes = map ((+ag).maximum0.map coord) labelSizes
@@ -317,7 +318,7 @@ axisMapping :: AxisT z -> RectSize
 axisMapping (AxisT et _ rev ad) (x2,y2) = case et of
     E_Top    -> (x1,y2,x2,y2, Vector 0 1,    mapx y2, imapx)
     E_Bottom -> (x1,y1,x2,y1, Vector 0 (-1), mapx y1, imapx)
-    E_Left   -> (x2,y2,x2,y1, Vector 1 0,    mapy x2, imapy) 
+    E_Left   -> (x2,y2,x2,y1, Vector 1 0,    mapy x2, imapy)
     E_Right  -> (x1,y2,x1,y1, Vector (-1) 0, mapy x1, imapy)
   where
     (x1,y1) = (0,0)
@@ -332,10 +333,10 @@ axisMapping (AxisT et _ rev ad) (x2,y2) = case et of
 
     reverseR r@(r0,r1)  = if rev then (r1,r0) else r
 
--- 
+--
 renderAxisGrid :: RectSize -> AxisT z -> ChartBackend ()
-renderAxisGrid sz@(w,h) at@(AxisT re as _ ad) = 
-    withLineStyle (_axis_grid_style as) $ 
+renderAxisGrid sz@(w,h) at@(AxisT re as _ ad) =
+    withLineStyle (_axis_grid_style as) $
       mapM_ (drawGridLine re) (_axis_grid ad)
   where
     (_,_,_,_,_,axisPoint,_) = axisMapping at sz
@@ -352,7 +353,7 @@ renderAxisGrid sz@(w,h) at@(AxisT re as _ ad) =
               in alignStrokePoints [Point 0 v',Point w v'] >>= strokePointPath
 
 
--- | Construct an axis given the positions for ticks, grid lines, and 
+-- | Construct an axis given the positions for ticks, grid lines, and
 -- labels, and the labelling function
 makeAxis :: PlotValue x => (x -> String) -> ([x],[x],[x]) -> AxisData x
 makeAxis labelf (labelvs, tickvs, gridvs) = AxisData {
@@ -371,7 +372,7 @@ makeAxis labelf (labelvs, tickvs, gridvs) = AxisData {
     min'        = minimum labelvs
     max'        = maximum labelvs
 
--- | Construct an axis given the positions for ticks, grid lines, and 
+-- | Construct an axis given the positions for ticks, grid lines, and
 -- labels, and the positioning and labelling functions
 makeAxis' :: Ord x => (x -> Double) -> (Double -> x) -> (x -> String)
                    -> ([x],[x],[x]) -> AxisData x
@@ -396,7 +397,7 @@ defaultGridLineStyle :: LineStyle
 defaultGridLineStyle = dashedLine 1 [5,5] $ opaque lightgrey
 
 instance Default AxisStyle where
-  def = AxisStyle 
+  def = AxisStyle
     { _axis_line_style  = defaultAxisLineStyle
     , _axis_label_style = def
     , _axis_grid_style  = defaultGridLineStyle
