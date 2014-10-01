@@ -67,10 +67,10 @@ instance (PlotValue x, PlotValue y1, PlotValue y2) => Zoomable (LayoutLR x y1 y2
 transformAxis :: PlotValue x => AxisTransform -> LayoutAxis x -> LayoutAxis x
 transformAxis (a,b) axis = let
   override ax = ax' where
-    ax' = _laxis_generate axis [l,h]
+    ax' = autoAxis [l,r]
     l = _axis_tropweiv ax (0,1) a
-    h = _axis_tropweiv ax (0,1) b
-  in axis { _laxis_override = override . (_laxis_override axis) }
+    r = _axis_tropweiv ax (0,1) b
+  in axis { _laxis_override = override } -- . (_laxis_override axis) }
 
 ------------------------------------------------------------
 
