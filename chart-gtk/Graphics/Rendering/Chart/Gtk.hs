@@ -43,20 +43,20 @@ type AxisTransform = (Double,Double)
 -- | class for the types of things that can be zoomed and rendered
 class ToRenderable z => Zoomable z where
   -- | Window Dims -> xtransform -> ytransform -> Zoomable -> Zoomable
-  transform :: Range -> AxisTransform -> AxisTransform -> z -> z
+  transform :: AxisTransform -> AxisTransform -> z -> z
 
 instance (PlotValue x, PlotValue y) => Zoomable (Layout x y) where
-  transform (width,height) (p1x, p2x) (p1y,p2y) l = newaxis where
-    laxisx = transformAxis width (p1x,p2x) (_layout_x_axis l)
-    laxisy = transformAxis height (p1y,p2y) (_layout_y_axis l)
+  transform (p1x, p2x) (p1y,p2y) l = newaxis where
+    laxisx = transformAxis (p1x,p2x) (_layout_x_axis l)
+    laxisy = transformAxis (p1y,p2y) (_layout_y_axis l)
     newaxis = l {_layout_x_axis = laxisx
                 , _layout_y_axis = laxisy }
 
 instance (PlotValue x, PlotValue y1, PlotValue y2) => Zoomable (LayoutLR x y1 y2) where
-  transform (width,height) (p1x,p2x) (p1y,p2y) lr = newaxis where
-    laxisx = transformAxis width (p1x,p2x) (_layoutlr_x_axis lr)
-    laxisy1 = transformAxis height (p1y,p2y) (_layoutlr_left_axis lr)
-    laxisy2 = transformAxis height (p1y,p2y) (_layoutlr_right_axis lr)
+  transform (p1x,p2x) (p1y,p2y) lr = newaxis where
+    laxisx = transformAxis (p1x,p2x) (_layoutlr_x_axis lr)
+    laxisy1 = transformAxis (p1y,p2y) (_layoutlr_left_axis lr)
+    laxisy2 = transformAxis (p1y,p2y) (_layoutlr_right_axis lr)
     newaxis = lr { _layoutlr_x_axis = laxisx
                  , _layoutlr_left_axis = laxisy1
                  , _layoutlr_right_axis = laxisy2 }
@@ -64,12 +64,12 @@ instance (PlotValue x, PlotValue y1, PlotValue y2) => Zoomable (LayoutLR x y1 y2
 
 -- | Transform the apparent device coordinates based on the normalized
 -- view encoded by the AxisTransform pair
-transformAxis :: PlotValue x => Double -> AxisTransform -> LayoutAxis x -> LayoutAxis x
-transformAxis len (a,b) axis = let
+transformAxis :: PlotValue x => AxisTransform -> LayoutAxis x -> LayoutAxis x
+transformAxis (a,b) axis = let
   override ax = ax' where
     ax' = _laxis_generate axis [l,h]
-    l = _axis_tropweiv ax (0,len) (len*a)
-    h = _axis_tropweiv ax (0,len) (len*b)
+    l = _axis_tropweiv ax (0,1) a
+    h = _axis_tropweiv ax (0,1) b
   in axis { _laxis_override = override . (_laxis_override axis) }
 
 ------------------------------------------------------------
@@ -91,12 +91,12 @@ zoomZero = ZoomState { press = Nothing
                      , yrange = (0,1) }
 
 
-zoomTransform :: Zoomable z => Range -> ZoomStack -> z -> z
-zoomTransform r zs z = z' where
+zoomTransform :: Zoomable z => ZoomStack -> z -> z
+zoomTransform zs z = z' where
   z' = case (getPan zs, getXrange zs, getYrange zs) of
      (PanState (0,0) _, (0,1), (0,1)) -> z
      (PanState (px,py) _,xr, yr) -> z' where
-          z' = transform r xr' yr' z
+          z' = transform xr' yr' z
           xr' = propagate xr (px,1+px)
           yr' = propagate yr (py,1+py)
 
@@ -227,8 +227,7 @@ createZoomableWindow z windowWidth windowHeight = do
     G.widgetSetSizeRequest canvas windowWidth windowHeight
     G.onExpose canvas $ const $ do
       zs <- readIORef zooms
-      winsize <- dwidth canvas
-      let r = toRenderable $ zoomTransform winsize zs z
+      let r = toRenderable $ zoomTransform zs z
       _updateCanvas False r canvas
       drawMouseBox zs canvas
       G.widgetGetDrawWindow canvas >>= G.drawWindowEndPaint -- manually finish canvas
@@ -303,8 +302,7 @@ makeMenu window canvas ref z = do
           Nothing -> return ()
           Just p  -> do
             zs <- readIORef ref
-            r <- dwidth canvas
-            renderableToFile def p $ toRenderable $ zoomTransform r zs z
+            renderableToFile def p $ toRenderable $ zoomTransform zs z
             return ()
       _ -> return () -- shouldn't get here.
 
