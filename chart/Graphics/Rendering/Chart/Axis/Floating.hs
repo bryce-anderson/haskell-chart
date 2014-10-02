@@ -46,7 +46,7 @@ instance PlotValue Double where
     toValue    = id
     fromValue  = id
     autoAxis   = autoScaledAxis def
-    rangedAxis = scaledAxis def
+    rangedAxis = smoothAxis def
 
 -- | A wrapper class for doubles used to indicate they are to
 -- be plotted against a percentage axis.
@@ -104,14 +104,37 @@ scaledAxis :: RealFloat a => LinearAxisParams a -> (a,a) -> AxisData a
 scaledAxis lap rs@(minV,maxV) = makeAxis' realToFrac realToFrac
                                          (_la_labelf lap) (labelvs,tickvs,gridvs)
   where
-    range _   | minV == maxV = if minV==0 then (-1,1) else
-                               let d = abs (minV * 0.01) in (minV-d,maxV+d)
-              | otherwise    = rs
+    r | minV == maxV = if minV==0 then (-1,1) else
+                       let d = abs (minV * 0.01) in (minV-d,maxV+d)
+      | otherwise    = rs
     labelvs   = map fromRational $ steps (fromIntegral (_la_nLabels lap)) r
     tickvs    = map fromRational $ steps (fromIntegral (_la_nTicks lap))
                                          (minimum labelvs,maximum labelvs)
     gridvs    = labelvs
-    r         = range rs
+
+-- | Generate a linear axis with the specified bounds
+smoothAxis :: RealFloat a => LinearAxisParams a -> (a,a) -> AxisData a
+smoothAxis lap rs@(minV,maxV) = axis
+  where
+    range | minV == maxV = if minV==0 then (-1,1) else
+                           let d = abs (minV * 0.01) in (minV-d,maxV+d)
+          | otherwise   = rs
+    labelvs   = map fromRational $ valid $ steps (fromIntegral (_la_nLabels lap)) range
+    tickvs    = map fromRational $ valid $ steps (fromIntegral (_la_nTicks lap)) range
+    valid = filter (\s -> minVr <= s && s <= maxVr)
+    minVr = toRational minV :: Rational
+    maxVr = toRational maxV :: Rational
+    gridvs    = labelvs
+
+    axis = AxisData {
+      _axis_visibility = def,
+      _axis_viewport = linMap realToFrac range,
+      _axis_tropweiv = invLinMap realToFrac realToFrac range,
+      _axis_ticks    = zip tickvs (repeat 2)  ++  zip labelvs (repeat 5),
+      _axis_grid     = gridvs,
+      _axis_labels   = [[ (v,_la_labelf lap v) | v <- labelvs ]]
+    }
+
 
 -- | Generate a linear axis automatically, scaled appropriately for the
 -- input data.
