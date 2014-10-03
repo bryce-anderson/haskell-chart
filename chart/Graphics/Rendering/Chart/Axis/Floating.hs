@@ -46,7 +46,6 @@ instance PlotValue Double where
     toValue    = id
     fromValue  = id
     autoAxis   = autoScaledAxis def
-    rangedAxis = smoothAxis def
 
 -- | A wrapper class for doubles used to indicate they are to
 -- be plotted against a percentage axis.
@@ -60,7 +59,6 @@ instance PlotValue Percent where
     toValue  = unPercent
     fromValue= Percent
     autoAxis = autoScaledAxis def {-_la_labelf=-}
-    rangedAxis = scaledAxis def
 
 -- | A wrapper class for doubles used to indicate they are to
 -- be plotted against a log axis.
@@ -74,7 +72,6 @@ instance PlotValue LogValue where
     toValue (LogValue x) = log x
     fromValue d          = LogValue (exp d)
     autoAxis             = autoScaledLogAxis def
-    rangedAxis           = scaledLogAxis def
 
 showD :: (RealFloat d) => d -> String
 showD x = case reverse $ showFFloat Nothing x "" of
@@ -101,7 +98,7 @@ instance (Show a, RealFloat a) => Default (LinearAxisParams a) where
 
 -- | Generate a linear axis with the specified bounds
 scaledAxis :: RealFloat a => LinearAxisParams a -> (a,a) -> AxisData a
-scaledAxis lap rs@(minV,maxV) = makeAxis' realToFrac realToFrac
+scaledAxis lap rs@(minV,maxV) = makeAxis' realToFrac realToFrac (smoothAxis lap)
                                          (_la_labelf lap) (labelvs,tickvs,gridvs)
   where
     r | minV == maxV = if minV==0 then (-1,1) else
@@ -132,7 +129,8 @@ smoothAxis lap rs@(minV,maxV) = axis
       _axis_tropweiv = invLinMap realToFrac realToFrac range,
       _axis_ticks    = zip tickvs (repeat 2)  ++  zip labelvs (repeat 5),
       _axis_grid     = gridvs,
-      _axis_labels   = [[ (v,_la_labelf lap v) | v <- labelvs ]]
+      _axis_labels   = [[ (v,_la_labelf lap v) | v <- labelvs ]],
+      _axis_ranged   = smoothAxis lap
     }
 
 
@@ -190,7 +188,7 @@ autoScaledLogAxis lap ps0 = scaledLogAxis lap r
 -- input data.
 scaledLogAxis :: RealFloat a => LogAxisParams a -> (a,a) -> AxisData a
 scaledLogAxis lap (minV,maxV) =
-    makeAxis' (realToFrac . log) (realToFrac . exp)
+    makeAxis' (realToFrac . log) (realToFrac . exp) (scaledLogAxis lap)
               (_loga_labelf lap) (wrap rlabelvs, wrap rtickvs, wrap rgridvs)
         where
           wrap      = map fromRational

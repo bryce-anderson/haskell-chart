@@ -73,7 +73,6 @@ class Ord a => PlotValue a where
     toValue  :: a -> Double
     fromValue:: Double -> a
     autoAxis :: AxisFn a
-    rangedAxis :: (a,a) -> AxisData a
 
 -- | Configures whick visual elements of a axis are shown at the
 --   appropriate edge of a plot area.
@@ -117,7 +116,10 @@ data AxisData x = AxisData {
 
     -- | The positions on the axis (in viewport units) where
     --   we want to show grid lines.
-    _axis_grid     :: [ x ]
+    _axis_grid     :: [ x ],
+
+    -- | Rescale the axis to exactly the specified size
+    _axis_ranged :: (x,x) -> AxisData x
 }
 
 -- | Control values for how an axis gets displayed.
@@ -355,14 +357,18 @@ renderAxisGrid sz@(w,h) at@(AxisT re as _ ad) =
 
 -- | Construct an axis given the positions for ticks, grid lines, and
 -- labels, and the labelling function
-makeAxis :: PlotValue x => (x -> String) -> ([x],[x],[x]) -> AxisData x
-makeAxis labelf (labelvs, tickvs, gridvs) = AxisData {
+makeAxis :: PlotValue x => ((x,x) -> AxisData x)
+                        -> (x -> String)
+                        -> ([x],[x],[x])
+                        -> AxisData x
+makeAxis rescale labelf (labelvs, tickvs, gridvs) = AxisData {
     _axis_visibility = def,
     _axis_viewport = newViewport,
     _axis_tropweiv = newTropweiv,
     _axis_ticks    = newTicks,
     _axis_grid     = gridvs,
-    _axis_labels   = [newLabels]
+    _axis_labels   = [newLabels],
+    _axis_ranged   = rescale
     }
   where
     newViewport = vmap (min',max')
@@ -374,15 +380,16 @@ makeAxis labelf (labelvs, tickvs, gridvs) = AxisData {
 
 -- | Construct an axis given the positions for ticks, grid lines, and
 -- labels, and the positioning and labelling functions
-makeAxis' :: Ord x => (x -> Double) -> (Double -> x) -> (x -> String)
-                   -> ([x],[x],[x]) -> AxisData x
-makeAxis' t f labelf (labelvs, tickvs, gridvs) = AxisData {
+makeAxis' :: Ord x => (x -> Double) -> (Double -> x) -> ((x,x) -> AxisData x) ->
+                       (x -> String) -> ([x],[x],[x]) -> AxisData x
+makeAxis' t f rescale labelf (labelvs, tickvs, gridvs) = AxisData {
     _axis_visibility = def,
     _axis_viewport = linMap t (minimum labelvs, maximum labelvs),
     _axis_tropweiv = invLinMap f t (minimum labelvs, maximum labelvs),
     _axis_ticks    = zip tickvs (repeat 2)  ++  zip labelvs (repeat 5),
     _axis_grid     = gridvs,
-    _axis_labels   = [[ (v,labelf v) | v <- labelvs ]]
+    _axis_labels   = [[ (v,labelf v) | v <- labelvs ]],
+    _axis_ranged   = rescale
     }
 
 

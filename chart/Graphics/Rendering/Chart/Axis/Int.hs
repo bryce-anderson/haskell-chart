@@ -21,13 +21,11 @@ instance PlotValue Int where
     toValue    = fromIntegral
     fromValue  = round
     autoAxis   = autoScaledIntAxis defaultIntAxis
-    rangedAxis = scaledIntAxis defaultIntAxis
 
 instance PlotValue Integer where
     toValue    = fromIntegral
     fromValue  = round
     autoAxis   = autoScaledIntAxis defaultIntAxis
-    rangedAxis = scaledIntAxis defaultIntAxis
 
 defaultIntAxis :: (Show a) => LinearAxisParams a
 defaultIntAxis  = LinearAxisParams {
@@ -45,7 +43,7 @@ autoScaledIntAxis lap ps = scaledIntAxis lap rs
 scaledIntAxis :: (Integral i, PlotValue i) =>
                  LinearAxisParams i -> (i,i) -> AxisData i
 scaledIntAxis lap (minI,maxI) =
-    makeAxis (_la_labelf lap) (labelvs,tickvs,gridvs)
+    makeAxis smooth (_la_labelf lap) (labelvs,tickvs,gridvs)
   where
     r | minI == maxI = (fromIntegral $ minI-1, fromIntegral $ minI+1)
       | otherwise    = (fromIntegral   minI,   fromIntegral   maxI)
@@ -55,6 +53,7 @@ scaledIntAxis lap (minI,maxI) =
                                   ( fromIntegral $ minimum labelvs
                                   , fromIntegral $ maximum labelvs )
     gridvs    = labelvs
+    smooth    = scaledIntAxis lap
 
 stepsInt :: Integral a => a -> Range -> [a]
 stepsInt nSteps range = bestSize (goodness alt0) alt0 alts

@@ -29,7 +29,6 @@ instance PlotValue PlotIndex where
     toValue (PlotIndex i) = fromIntegral i
     fromValue             = PlotIndex . round
     autoAxis              = autoIndexAxis []
-    rangedAxis            = indexAxis []
 
 -- | Augment a list of values with index numbers for plotting.
 addIndexes :: [a] -> [(PlotIndex,a)]
@@ -50,7 +49,8 @@ indexAxis labels (imin,imax) = AxisData {
     _axis_ticks    = [],
     _axis_labels   = [filter (\(i,_) -> i >= imin && i <= imax)
                             (zip [0..] labels)],
-    _axis_grid     = []
+    _axis_grid     = [],
+    _axis_ranged   = indexAxis labels
     }
   where
     vport r i = linMap id ( fromIntegral imin - 0.5

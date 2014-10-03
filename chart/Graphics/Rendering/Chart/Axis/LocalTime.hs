@@ -33,7 +33,6 @@ instance PlotValue LocalTime where
     toValue    = doubleFromLocalTime
     fromValue  = localTimeFromDouble
     autoAxis   = autoTimeAxis
-    rangedAxis = undefined
 
 ----------------------------------------------------------------------
 
@@ -106,10 +105,12 @@ timeAxis tseq lseq labelf lal cseq contextf clal pts = AxisData {
     _axis_labels   = [ [ (t,l) | (t,l) <- labels labelf   ltimes lal, visible t]
                      , [ (t,l) | (t,l) <- labels contextf ctimes clal, visible t]
                      ],
-    _axis_grid     = [ t     | t <- ltimes, visible t]
+    _axis_grid     = [ t     | t <- ltimes, visible t],
+    _axis_ranged   = \(a,b) -> autoTimeAxis [a,b]
     }
   where
     (minT,maxT)  = case pts of
+
                        [] -> (refLocalTime,refLocalTime)
                        ps -> (minimum ps, maximum ps)
     refLocalTime = LocalTime (ModifiedJulianDay 0) midnight
