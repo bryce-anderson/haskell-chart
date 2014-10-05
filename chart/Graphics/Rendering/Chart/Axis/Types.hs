@@ -22,6 +22,7 @@ module Graphics.Rendering.Chart.Axis.Types(
 
     makeAxis,
     makeAxis',
+    makeRangedAxis,
 
     axisToRenderable,
     renderAxisGrid,
@@ -357,10 +358,8 @@ renderAxisGrid sz@(w,h) at@(AxisT re as _ ad) =
 
 -- | Construct an axis given the positions for ticks, grid lines, and
 -- labels, and the labelling function
-makeAxis :: PlotValue x => ((x,x) -> AxisData x)
-                        -> (x -> String)
-                        -> ([x],[x],[x])
-                        -> AxisData x
+makeAxis :: PlotValue x => ((x,x) -> AxisData x) -> (x -> String) ->
+                   ([x],[x],[x]) -> AxisData x
 makeAxis rescale labelf (labelvs, tickvs, gridvs) = AxisData {
     _axis_visibility = def,
     _axis_viewport = newViewport,
@@ -382,15 +381,24 @@ makeAxis rescale labelf (labelvs, tickvs, gridvs) = AxisData {
 -- labels, and the positioning and labelling functions
 makeAxis' :: Ord x => (x -> Double) -> (Double -> x) -> ((x,x) -> AxisData x) ->
                        (x -> String) -> ([x],[x],[x]) -> AxisData x
-makeAxis' t f rescale labelf (labelvs, tickvs, gridvs) = AxisData {
+makeAxis' t f rescale labelf vs@(labelvs,_,_) = axis
+  where
+    axis = makeRangedAxis range t f rescale labelf vs
+    range = (minimum labelvs, maximum labelvs)
+
+makeRangedAxis :: Ord x  => (x,x) -> (x -> Double) -> (Double -> x) ->
+            ((x,x) -> AxisData x) ->(x -> String) -> ([x],[x],[x]) -> AxisData x
+makeRangedAxis ps t f rescale labelf (labelvs, tickvs, gridvs) = AxisData {
     _axis_visibility = def,
-    _axis_viewport = linMap t (minimum labelvs, maximum labelvs),
-    _axis_tropweiv = invLinMap f t (minimum labelvs, maximum labelvs),
+    _axis_viewport = linMap t ps,
+    _axis_tropweiv = invLinMap f t ps,
     _axis_ticks    = zip tickvs (repeat 2)  ++  zip labelvs (repeat 5),
     _axis_grid     = gridvs,
     _axis_labels   = [[ (v,labelf v) | v <- labelvs ]],
     _axis_ranged   = rescale
     }
+
+
 
 
 ----------------------------------------------------------------------

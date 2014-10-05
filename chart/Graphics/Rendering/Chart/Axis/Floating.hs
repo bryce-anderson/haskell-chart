@@ -19,6 +19,7 @@ module Graphics.Rendering.Chart.Axis.Floating(
     scaledAxis,
     autoScaledAxis,
     scaledLogAxis,
+    smoothLogAxis,
     autoScaledLogAxis,
     autoSteps,
 
@@ -121,18 +122,8 @@ smoothAxis lap rs@(minV,maxV) = axis
     valid = filter (\s -> minVr <= s && s <= maxVr)
     minVr = toRational minV :: Rational
     maxVr = toRational maxV :: Rational
-    gridvs    = labelvs
-
-    axis = AxisData {
-      _axis_visibility = def,
-      _axis_viewport = linMap realToFrac range,
-      _axis_tropweiv = invLinMap realToFrac realToFrac range,
-      _axis_ticks    = zip tickvs (repeat 2)  ++  zip labelvs (repeat 5),
-      _axis_grid     = gridvs,
-      _axis_labels   = [[ (v,_la_labelf lap v) | v <- labelvs ]],
-      _axis_ranged   = smoothAxis lap
-    }
-
+    axis = makeRangedAxis range realToFrac realToFrac (smoothAxis lap)
+                             (_la_labelf lap) (labelvs,tickvs,labelvs)
 
 -- | Generate a linear axis automatically, scaled appropriately for the
 -- input data.
@@ -188,7 +179,7 @@ autoScaledLogAxis lap ps0 = scaledLogAxis lap r
 -- input data.
 scaledLogAxis :: RealFloat a => LogAxisParams a -> (a,a) -> AxisData a
 scaledLogAxis lap (minV,maxV) =
-    makeAxis' (realToFrac . log) (realToFrac . exp) (scaledLogAxis lap)
+    makeAxis' (realToFrac . log) (realToFrac . exp) (smoothLogAxis lap)
               (_loga_labelf lap) (wrap rlabelvs, wrap rtickvs, wrap rgridvs)
         where
           wrap      = map fromRational
@@ -196,6 +187,26 @@ scaledLogAxis lap (minV,maxV) =
                 | otherwise    = (realToFrac $ minV,   realToFrac $ maxV)
           (rlabelvs, rtickvs, rgridvs) = logTicks range
 
+
+-- | Generate a log axis automatically, scaled appropriate for the
+-- input data.
+smoothLogAxis :: RealFloat a => LogAxisParams a -> (a,a) -> AxisData a
+smoothLogAxis lap r@(minV,maxV) =
+    makeRangedAxis r (realToFrac . log) (realToFrac . exp) (scaledLogAxis lap)
+              (_loga_labelf lap) (wrap rlabelvs', wrap rtickvs', wrap rgridvs')
+        where
+          wrap      = map fromRational
+          range | minV == maxV = (realToFrac $ minV/3, realToFrac $ maxV*3)
+                | otherwise    = (realToFrac $ minV,   realToFrac $ maxV)
+
+          (rlabelvs, rtickvs, rgridvs) = logTicks range
+          rlabelvs' = valid rlabelvs
+          rtickvs' = valid rtickvs
+          rgridvs' = rgridvs
+
+          valid = filter (\s -> minVr <= s && s <= maxVr)
+          minVr = toRational minV :: Rational
+          maxVr = toRational maxV :: Rational
 
 data LogAxisParams a = LogAxisParams {
     -- | The function used to show the axes labels.
