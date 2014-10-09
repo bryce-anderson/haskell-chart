@@ -4,7 +4,10 @@
 -- Copyright   :  (c) Tim Docker 2006
 -- License     :  BSD-style (see chart/COPYRIGHT)
 
-{-# LANGUAGE ExistentialQuantification #-}
+{-# LANGUAGE ExistentialQuantification,
+             MultiParamTypeClasses,
+             FunctionalDependencies,
+             FlexibleInstances   #-}
 
 module Graphics.Rendering.Chart.Gtk(
     renderableToWindow,
@@ -40,11 +43,24 @@ data PanState = PanState AxisTransform (Maybe Range)
 -- | transform that defines the normalized axis transform
 type AxisTransform = (Double,Double)
 
--- | class for the types of things that can be zoomed and rendered
-class ToRenderable z => Zoomable z where
-  -- | Window Dims -> xtransform -> ytransform -> Zoomable -> Zoomable
-  transform :: AxisTransform -> AxisTransform -> z -> z
+class ToRenderable t => RenderablePlus t a | t -> a  where
+  -- | Renders the window and provides a way to scale the chart
+  buildRenderable :: t -> Renderable a
+  transformt :: (Point, Point) -> PickFn a -> t -> Maybe t
 
+instance (PlotValue x, PlotValue y) => RenderablePlus (Layout x y) (LayoutPick x y y) where
+  buildRenderable = layoutToRenderable
+  transformt (p1,p2) f t = do
+   lp1 <- f p1
+   lp2 <- f p2
+   case (lp1, lp2) of
+     (LayoutPick_PlotArea x1 y1 _, LayoutPick_PlotArea x2 y2 _) -> t'
+       where
+         t' = undefined
+
+     _ -> Nothing
+
+{-
 instance (PlotValue x, PlotValue y) => Zoomable (Layout x y) where
   transform (p1x, p2x) (p1y,p2y) l = newaxis where
     laxisx = transformAxis (p1x,p2x) (_layout_x_axis l)
@@ -60,7 +76,7 @@ instance (PlotValue x, PlotValue y1, PlotValue y2) => Zoomable (LayoutLR x y1 y2
     newaxis = lr { _layoutlr_x_axis = laxisx
                  , _layoutlr_left_axis = laxisy1
                  , _layoutlr_right_axis = laxisy2 }
-
+-}
 
 -- | Transform the apparent device coordinates based on the normalized
 -- view encoded by the AxisTransform pair
@@ -75,9 +91,9 @@ transformAxis (a,b) axis = let
 ------------------------------------------------------------
 
 -- | bits for generating/modifying/querying the state of zoom
-data ZoomState =  ZoomState { press :: Maybe Range -- device
+data ZoomState =  ZoomState { press :: Maybe Range      -- device
                             , mouse_drag :: Maybe Range -- device
-                            , panstate :: PanState -- device
+                            , panstate :: PanState      -- device
                             , xrange :: AxisTransform
                             , yrange :: AxisTransform }
 
@@ -90,15 +106,20 @@ zoomZero = ZoomState { press = Nothing
                      , xrange = (0,1)
                      , yrange = (0,1) }
 
-
-zoomTransform :: Zoomable z => ZoomStack -> z -> z
-zoomTransform zs z = z' where
+-- transformt :: (Point, Point) -> AxisFn a -> t -> Maybe t
+zoomTransform :: RenderablePlus z a => ZoomStack -> Range -> PickFn a -> z -> z
+zoomTransform zs (width,height) f z = z' where
   z' = case (getPan zs, getXrange zs, getYrange zs) of
      (PanState (0,0) _, (0,1), (0,1)) -> z
-     (PanState (px,py) _,xr, yr) -> z' where
-          z' = transform xr' yr' z
-          xr' = propagate xr (px,1+px)
-          yr' = propagate yr (py,1+py)
+     (PanState (px,py) _,xrange, yrange) -> z' where
+          z' = case transformt (x,y) f z of
+            Just z' -> z'
+            Nothing -> z
+
+          x = Point (xl*width) (xr*width)
+          y = Point (yt*height) (yb*height)
+          (xl,xr) = (propagate xrange (px,1+px))
+          (yt,yb) = (propagate yrange (py,1+py))
 
 -- | Remove a zoom from the stack
 popZoom :: ZoomStack -> ZoomStack
@@ -145,10 +166,10 @@ setPanPress r zs = setPan p zs where
 
 -- | Some constants TODO: these may not actually be 'constant'
 leftmargin, rightmargin, topmargin, bottommargin :: Double
-leftmargin   = 39
-rightmargin  = 16
-topmargin    = 38
-bottommargin = 54
+leftmargin   = 0
+rightmargin  = 0
+topmargin    = 0
+bottommargin = 0
 
 
 -- do action m for any keypress (except modified keys)
@@ -199,7 +220,7 @@ toWindow :: (Default r, ToRenderable r) =>Int -> Int -> EC r () -> IO ()
 toWindow windowWidth windowHeight ec = renderableToWindow r windowWidth windowHeight where
                        r = toRenderable (execEC ec)
 
-toZoomableWindow :: (Default z, Zoomable z) => Int -> Int -> EC z () -> IO ()
+toZoomableWindow :: (Default z, RenderablePlus z a) => Int -> Int -> EC z () -> IO ()
 toZoomableWindow windowWidth windowHeight ec = makeWindow window where
   window = createZoomableWindow (execEC ec) windowWidth windowHeight
 
@@ -213,13 +234,14 @@ createRenderableWindow chart windowWidth windowHeight = do
     G.set window [G.containerChild G.:= canvas]
     return window
 
-createZoomableWindow :: Zoomable z => z -> Int -> Int -> IO G.Window
+createZoomableWindow :: RenderablePlus z a => z -> Int -> Int -> IO G.Window
 createZoomableWindow z windowWidth windowHeight = do
     zooms <- newIORef [zoomZero]
+    pickfn <- newIORef nullPickFn :: IO(IORef (PickFn a) )
     window <- G.windowNew
     vbox <- G.vBoxNew False 0
     canvas <- G.drawingAreaNew
-    menu <- makeMenu window canvas zooms z
+    menu <- makeMenu window canvas zooms pickfn z
     G.widgetSetSizeRequest canvas windowWidth windowHeight
     G.boxPackStart vbox menu G.PackNatural 0
     G.boxPackEnd vbox canvas G.PackGrow 0
@@ -227,7 +249,9 @@ createZoomableWindow z windowWidth windowHeight = do
     G.widgetSetSizeRequest canvas windowWidth windowHeight
     G.onExpose canvas $ const $ do
       zs <- readIORef zooms
-      let r = toRenderable $ zoomTransform zs z
+      range <- dsize canvas
+      fn <- readIORef pickfn
+      let r = toRenderable $ zoomTransform zs range fn z
       _updateCanvas False r canvas
       drawMouseBox zs canvas
       G.widgetGetDrawWindow canvas >>= G.drawWindowEndPaint -- manually finish canvas
@@ -265,13 +289,13 @@ mouseMotion zooms canvas GE.Motion { GE.eventX = x, GE.eventY = y} = do
   zs <- readIORef zooms
   case (getPress zs, getPan zs) of
     (Just _, _) -> do
-      (w,h) <- dwidth canvas
+      (w,h) <- dsize canvas
       writeIORef zooms $ setDrag (restrictX w x, restrictY h y) zs
       G.widgetQueueDraw canvas
       return True
 
     (_, PanState (dx,dy) (Just (lx, ly))) -> do
-      (w,h) <- dwidth canvas
+      (w,h) <- dsize canvas
       let dx' = dx-(x-lx)/w
           dy' = dy+(y-ly)/h -- the axis device coords are flipped
       writeIORef zooms $ setPan (PanState (dx',dy') (Just (x,y))) zs
@@ -280,8 +304,9 @@ mouseMotion zooms canvas GE.Motion { GE.eventX = x, GE.eventY = y} = do
 
     _ -> return True
 
-makeMenu :: Zoomable z => G.Window -> G.DrawingArea -> IORef ZoomStack -> z ->  IO G.MenuBar
-makeMenu window canvas ref z = do
+makeMenu :: RenderablePlus z a => G.Window -> G.DrawingArea -> IORef ZoomStack ->
+                       IORef (PickFn a) -> z ->  IO G.MenuBar
+makeMenu window canvas ref pickfn z = do
   menuBar <- G.menuBarNew
   filemenu <- G.menuItemNewWithMnemonic "_File"
   G.set menuBar [G.containerChild G.:= filemenu]
@@ -302,7 +327,9 @@ makeMenu window canvas ref z = do
           Nothing -> return ()
           Just p  -> do
             zs <- readIORef ref
-            renderableToFile def p $ toRenderable $ zoomTransform zs z
+            sz <- dsize canvas
+            fn <- readIORef pickfn
+            renderableToFile def p $ toRenderable $ zoomTransform zs sz fn z
             return ()
       _ -> return () -- shouldn't get here.
 
@@ -319,7 +346,7 @@ makeMenu window canvas ref z = do
 onButtonEvent :: IORef ZoomStack -> G.DrawingArea -> GE.Event -> IO Bool
 onButtonEvent ref canvas (e@GE.Button { GE.eventClick = GE.SingleClick,
                                         GE.eventButton = GE.LeftButton }) = do
-  (w,h) <- dwidth canvas
+  (w,h) <- dsize canvas
   modifyIORef ref $ \z -> setPress (restrictX w (GE.eventX e),restrictY h (GE.eventY e)) z
 
   G.widgetQueueDraw canvas
@@ -327,7 +354,7 @@ onButtonEvent ref canvas (e@GE.Button { GE.eventClick = GE.SingleClick,
 
 onButtonEvent ref canvas (e@GE.Button { GE.eventClick = GE.ReleaseClick,
                                         GE.eventButton = GE.LeftButton }) = do
-  (w,h) <- dwidth canvas
+  (w,h) <- dsize canvas
   r <- onButtonRelease ref canvas (restrictX w (GE.eventX e), restrictY h (GE.eventY e))
   G.widgetQueueDraw canvas
   return r
@@ -341,7 +368,7 @@ onButtonEvent ref canvas (GE.Button { GE.eventClick = GE.SingleClick,
 -- | Pan click
 onButtonEvent ref canvas (e@GE.Button { GE.eventClick = GE.SingleClick,
                                         GE.eventButton = GE.MiddleButton }) = do
-  (w,h) <- dwidth canvas
+  (w,h) <- dsize canvas
   let x = restrictX w (GE.eventX e)
       y = restrictY h (GE.eventY e)
   modifyIORef ref $ setPanPress (Just (x,y))
@@ -367,9 +394,9 @@ restrictY height y | y < topmargin             = topmargin
                    | y > height - bottommargin = height - bottommargin
                    | otherwise                 = y
 
--- | get the width of the canvas as a pair of Double's
-dwidth :: G.DrawingArea -> IO (Double, Double)
-dwidth canvas = do
+-- | get the dimentions of the canvas as a pair of Double's
+dsize :: G.DrawingArea -> IO (Double, Double)
+dsize canvas = do
   (w, h) <- G.widgetGetSize canvas
   return (fromIntegral w, fromIntegral h)
 
@@ -404,7 +431,7 @@ onButtonRelease ref canvas (x,y) = let
         p1y = 1 - (max y y' - topmargin)/height' + py
 
   in do
-    wh <- dwidth canvas
+    wh <- dsize canvas
     modifyIORef ref $ go wh
     return True
 
