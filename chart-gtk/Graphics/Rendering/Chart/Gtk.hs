@@ -38,25 +38,42 @@ import Data.Default.Class
 import Control.Monad(when)
 import System.IO.Unsafe(unsafePerformIO)
 
-data PanState = PanState AxisTransform (Maybe Range)
-
 -- | transform that defines the normalized axis transform
 type AxisTransform = (Double,Double)
 
 class ToRenderable t => RenderablePlus t a | t -> a  where
   -- | Renders the window and provides a way to scale the chart
   buildRenderable :: t -> Renderable a
-  transformt :: (Point, Point) -> PickFn a -> t -> Maybe t
+  transformt :: (Point,Point) -> Range -> PickFn a -> t -> Maybe t
+  dragTransform :: (Point,Point) -> Range -> PickFn a -> t -> Maybe t
 
 instance (PlotValue x, PlotValue y) => RenderablePlus (Layout x y) (LayoutPick x y y) where
   buildRenderable = layoutToRenderable
-  transformt (p1,p2) f t = do
+  dragTransform (Point x y,Point x' y') (width,height) _ l = Just l'
+    where
+      l' = l { _layout_x_axis = xaxis, _layout_y_axis = yaxis }
+      dx = (x - x')/width
+      dy = (y' - y)/height
+      tw = (dx, 1+dx)
+      th = (dy, 1+dy)
+      xaxis = transformAxis tw (_layout_x_axis l)
+      yaxis = transformAxis th (_layout_y_axis l)
+
+
+  transformt (p1,p2) _ f l = do
    lp1 <- f p1
    lp2 <- f p2
    case (lp1, lp2) of
-     (LayoutPick_PlotArea x1 y1 _, LayoutPick_PlotArea x2 y2 _) -> t'
+     (LayoutPick_PlotArea x1 y1 _, LayoutPick_PlotArea x2 y2 _) -> Just l'
        where
-         t' = undefined
+         l' = l { _layout_x_axis = xaxis, _layout_y_axis = yaxis }
+         lr = (min x1 x2, max x1 x2)
+         tb = (min y1 y2, max y1 y2)
+         xoverride' = _laxis_override $ _layout_x_axis l
+         yoverride' = _laxis_override $ _layout_y_axis l
+         xaxis = (_layout_x_axis l) { _laxis_override = override lr . xoverride' }
+         yaxis = (_layout_y_axis l) { _laxis_override = override tb . yoverride' }
+         override range ax = _axis_ranged ax range
 
      _ -> Nothing
 
@@ -86,91 +103,56 @@ transformAxis (a,b) axis = let
     ax' = _axis_ranged ax (l,r)
     l = _axis_tropweiv ax (0,1) a
     r = _axis_tropweiv ax (0,1) b
-  in axis { _laxis_override = override } -- . (_laxis_override axis) }
+  override' = _laxis_override axis
+  in axis { _laxis_override = override . override' } -- . (_laxis_override axis) }
 
 ------------------------------------------------------------
 
 -- | bits for generating/modifying/querying the state of zoom
-data ZoomState =  ZoomState { press :: Maybe Range      -- device
-                            , mouse_drag :: Maybe Range -- device
-                            , panstate :: PanState      -- device
-                            , xrange :: AxisTransform
-                            , yrange :: AxisTransform }
-
-type ZoomStack = [ZoomState]
-
-zoomZero :: ZoomState
-zoomZero = ZoomState { press = Nothing
-                     , mouse_drag = Nothing
-                     , panstate = PanState (0,0) Nothing
-                     , xrange = (0,1)
-                     , yrange = (0,1) }
-
--- transformt :: (Point, Point) -> AxisFn a -> t -> Maybe t
-zoomTransform :: RenderablePlus z a => ZoomStack -> Range -> PickFn a -> z -> z
-zoomTransform zs (width,height) f z = z' where
-  z' = case (getPan zs, getXrange zs, getYrange zs) of
-     (PanState (0,0) _, (0,1), (0,1)) -> z
-     (PanState (px,py) _,xrange, yrange) -> z' where
-          z' = case transformt (x,y) f z of
-            Just z' -> z'
-            Nothing -> z
-
-          x = Point (xl*width) (xr*width)
-          y = Point (yt*height) (yb*height)
-          (xl,xr) = (propagate xrange (px,1+px))
-          (yt,yb) = (propagate yrange (py,1+py))
+data ZoomState t =  ZoomState { mouse_pos :: Maybe Point
+                              , left_press :: Maybe Point
+                              , press_complete :: Maybe (Point,Point)
+                              , drag_last :: Maybe Point
+                              , ts :: [t] }
 
 -- | Remove a zoom from the stack
-popZoom :: ZoomStack -> ZoomStack
-popZoom h@[_] = h
-popZoom (_:t) = t
+popZoom :: ZoomState a -> ZoomState a
+popZoom h@(ZoomState { ts = [_] }) = h
+popZoom h@(ZoomState { ts = (t:ts') }) = zoomZero ts'
 
-getXrange :: ZoomStack -> Range
-getXrange = xrange . head
 
-getYrange :: ZoomStack -> Range
-getYrange = yrange . head
+zoomZero :: [a] -> ZoomState a
+zoomZero ts = ZoomState { mouse_pos = Nothing
+                        , left_press = Nothing
+                        , press_complete = Nothing
+                        , drag_last = Nothing
+                        , ts = ts }
 
-getPress :: ZoomStack -> Maybe Range
-getPress (ZoomState{ press = r }:_) = r
+-------------------------------------------------------------
 
-setPress :: Range -> ZoomStack -> ZoomStack
-setPress r (z:zs) = (z { press = Just r }):zs
+zoomTransform :: RenderablePlus z a => ZoomState z -> Range -> PickFn a -> ZoomState z
+zoomTransform tss r f = panTransform (clear ts') r f
+  where
+    ZoomState { ts = z:_ } = tss
+    ts' = maybe tss id transformed
+    clear tss = tss { press_complete = Nothing }
+    transformed = do
+      ps <- press_complete tss
+      z' <- transformt ps r f z
+      return $ tss { ts = z':(ts tss) }
 
-clearPress :: ZoomStack -> ZoomStack
-clearPress (z:zs) = (z { press = Nothing }):zs
-
-getDrag :: ZoomStack -> Maybe Range
-getDrag (ZoomState{ mouse_drag = d }:_) = d
-
-setDrag :: Range -> ZoomStack -> ZoomStack
-setDrag r (z:zs) = (z { mouse_drag = Just r }):zs
-
-clearDrag :: ZoomStack -> ZoomStack
-clearDrag (z:zs) = (z { mouse_drag = Nothing }):zs
-
-getPan :: ZoomStack -> PanState
-getPan (ZoomState{panstate = p }:_) = p
-
-setPan :: PanState -> ZoomStack -> ZoomStack
-setPan p (h:hs) = h':hs where
-  h' = h { panstate = p }
-
-setPanPress :: Maybe Range -> ZoomStack -> ZoomStack
-setPanPress r zs = setPan p zs where
-  p = PanState a r
-  PanState a _ = getPan zs
+panTransform :: RenderablePlus z a => ZoomState z -> Range -> PickFn a -> ZoomState z
+panTransform tss r f = result
+  where
+    ZoomState { ts = z:t } = tss
+    result = maybe tss id transformed
+    transformed = do
+      p1 <- drag_last tss
+      p2 <- mouse_pos tss
+      let z' = maybe z id $ dragTransform (p1,p2) r f z
+      return $ tss { drag_last = Just p2, ts = z':t }
 
 -----------------------------------------------------------
-
--- | Some constants TODO: these may not actually be 'constant'
-leftmargin, rightmargin, topmargin, bottommargin :: Double
-leftmargin   = 0
-rightmargin  = 0
-topmargin    = 0
-bottommargin = 0
-
 
 -- do action m for any keypress (except modified keys)
 anyKey :: (Monad m) => m a -> GE.Event -> m Bool
@@ -236,7 +218,7 @@ createRenderableWindow chart windowWidth windowHeight = do
 
 createZoomableWindow :: RenderablePlus z a => z -> Int -> Int -> IO G.Window
 createZoomableWindow z windowWidth windowHeight = do
-    zooms <- newIORef [zoomZero]
+    zooms <- newIORef $ zoomZero [z]
     pickfn <- newIORef nullPickFn :: IO(IORef (PickFn a) )
     window <- G.windowNew
     vbox <- G.vBoxNew False 0
@@ -251,9 +233,12 @@ createZoomableWindow z windowWidth windowHeight = do
       zs <- readIORef zooms
       range <- dsize canvas
       fn <- readIORef pickfn
-      let r = toRenderable $ zoomTransform zs range fn z
-      _updateCanvas False r canvas
-      drawMouseBox zs canvas
+      let zs'@ ZoomState { ts =z':_ } = zoomTransform zs range fn
+      -- updates the canvas and saves the new PickFn
+      fn' <- _updateCanvas False (buildRenderable z') canvas
+      writeIORef pickfn fn'
+      writeIORef zooms zs'
+      drawMouseBox zs' canvas
       G.widgetGetDrawWindow canvas >>= G.drawWindowEndPaint -- manually finish canvas
       return True
 
@@ -263,48 +248,42 @@ createZoomableWindow z windowWidth windowHeight = do
     return window
 
 -- | Draws the mouse selection box
-drawMouseBox :: ZoomStack -> G.DrawingArea -> IO Bool
+drawMouseBox :: ZoomState a -> G.DrawingArea -> IO Bool
 drawMouseBox zoom canvas = do
-  case (getDrag zoom, getPress zoom) of
-    (Just (x,y), Just (x',y')) -> do
+  case (mouse_pos zoom, left_press zoom) of
+    (Just (Point x y), Just (Point x' y')) -> do
       let x'' = round $ min x x'
           y'' = round $ min y y'
           width = round $ abs (x - x')
           height = round $ abs (y - y')
 
-      if x'' >= round leftmargin && y'' >= round rightmargin
-        then do
-          win <- G.widgetGetDrawWindow canvas
-          gc <- gcNew win
-          G.drawRectangle win gc False x'' y'' width height
-          return True
-        else return True
+      win <- G.widgetGetDrawWindow canvas
+      gc <- gcNew win
+      G.drawRectangle win gc False x'' y'' width height
+      return True
 
     -- All other cases we dont draw
     _ -> return True
 
 -- | Saves the mouse position to draw the selection rectangle
-mouseMotion :: IORef ZoomStack -> G.DrawingArea -> GE.Event -> IO Bool
-mouseMotion zooms canvas GE.Motion { GE.eventX = x, GE.eventY = y} = do
+mouseMotion :: IORef (ZoomState a) -> G.DrawingArea -> GE.Event -> IO Bool
+mouseMotion zooms canvas GE.Motion { GE.eventX = x1, GE.eventY = y1 } = do
   zs <- readIORef zooms
-  case (getPress zs, getPan zs) of
+  case (left_press zs, drag_last zs) of
     (Just _, _) -> do
       (w,h) <- dsize canvas
-      writeIORef zooms $ setDrag (restrictX w x, restrictY h y) zs
+      writeIORef zooms $ zs { mouse_pos = Just $ Point x1 y1 }
       G.widgetQueueDraw canvas
       return True
 
-    (_, PanState (dx,dy) (Just (lx, ly))) -> do
-      (w,h) <- dsize canvas
-      let dx' = dx-(x-lx)/w
-          dy' = dy+(y-ly)/h -- the axis device coords are flipped
-      writeIORef zooms $ setPan (PanState (dx',dy') (Just (x,y))) zs
+    (_, Just _) -> do
+      writeIORef zooms $ zs { mouse_pos = Just $ Point x1 y1 }
       G.widgetQueueDraw canvas
       return True
 
     _ -> return True
 
-makeMenu :: RenderablePlus z a => G.Window -> G.DrawingArea -> IORef ZoomStack ->
+makeMenu :: RenderablePlus z a => G.Window -> G.DrawingArea -> IORef (ZoomState z) ->
                        IORef (PickFn a) -> z ->  IO G.MenuBar
 makeMenu window canvas ref pickfn z = do
   menuBar <- G.menuBarNew
@@ -329,7 +308,8 @@ makeMenu window canvas ref pickfn z = do
             zs <- readIORef ref
             sz <- dsize canvas
             fn <- readIORef pickfn
-            renderableToFile def p $ toRenderable $ zoomTransform zs sz fn z
+            let ZoomState { ts = r:_ } = zoomTransform zs sz fn
+            renderableToFile def p $ toRenderable r
             return ()
       _ -> return () -- shouldn't get here.
 
@@ -343,11 +323,11 @@ makeMenu window canvas ref pickfn z = do
 
 
 -- Handles the button events
-onButtonEvent :: IORef ZoomStack -> G.DrawingArea -> GE.Event -> IO Bool
+onButtonEvent :: IORef (ZoomState a) -> G.DrawingArea -> GE.Event -> IO Bool
 onButtonEvent ref canvas (e@GE.Button { GE.eventClick = GE.SingleClick,
                                         GE.eventButton = GE.LeftButton }) = do
   (w,h) <- dsize canvas
-  modifyIORef ref $ \z -> setPress (restrictX w (GE.eventX e),restrictY h (GE.eventY e)) z
+  modifyIORef ref $ \z -> z { left_press = Just (Point (GE.eventX e) (GE.eventY e)) }
 
   G.widgetQueueDraw canvas
   return True
@@ -355,7 +335,7 @@ onButtonEvent ref canvas (e@GE.Button { GE.eventClick = GE.SingleClick,
 onButtonEvent ref canvas (e@GE.Button { GE.eventClick = GE.ReleaseClick,
                                         GE.eventButton = GE.LeftButton }) = do
   (w,h) <- dsize canvas
-  r <- onButtonRelease ref canvas (restrictX w (GE.eventX e), restrictY h (GE.eventY e))
+  r <- onButtonRelease ref $ Point (GE.eventX e) (GE.eventY e)
   G.widgetQueueDraw canvas
   return r
 
@@ -369,30 +349,20 @@ onButtonEvent ref canvas (GE.Button { GE.eventClick = GE.SingleClick,
 onButtonEvent ref canvas (e@GE.Button { GE.eventClick = GE.SingleClick,
                                         GE.eventButton = GE.MiddleButton }) = do
   (w,h) <- dsize canvas
-  let x = restrictX w (GE.eventX e)
-      y = restrictY h (GE.eventY e)
-  modifyIORef ref $ setPanPress (Just (x,y))
+  let x = GE.eventX e
+      y = GE.eventY e
+  modifyIORef ref $ \z -> z { drag_last = Just (Point x y) }
   return True
 
 -- | Pan release
 onButtonEvent ref _ (GE.Button{ GE.eventClick = GE.ReleaseClick,
                                        GE.eventButton = GE.MiddleButton }) = do
-  modifyIORef ref $ setPanPress Nothing
+  modifyIORef ref $ \z -> z { drag_last = Nothing, mouse_pos = Nothing }
   return True
 
 -- | Other mouse events
 onButtonEvent _ _ _ = return False
 -- End of button events
-
-
--- | restricts the point on the canvas to the plot area
-restrictX width x | x < leftmargin          = leftmargin
-                  | x > width - rightmargin = width - rightmargin
-                  | otherwise               = x
-
-restrictY height y | y < topmargin             = topmargin
-                   | y > height - bottommargin = height - bottommargin
-                   | otherwise                 = y
 
 -- | get the dimentions of the canvas as a pair of Double's
 dsize :: G.DrawingArea -> IO (Double, Double)
@@ -400,53 +370,30 @@ dsize canvas = do
   (w, h) <- G.widgetGetSize canvas
   return (fromIntegral w, fromIntegral h)
 
--- | Propegates the scale if the system has already been scaled
-propagate :: AxisTransform -> AxisTransform -> AxisTransform
-propagate (a,b) (a',b') = (a'',b'') where
-  a'' = a + a'*w
-  b'' = a + b'*w
-  w = b - a
+onButtonRelease :: IORef (ZoomState a) -> Point -> IO Bool
+onButtonRelease ref p1@(Point x y) = do
+  ZoomState { left_press = Just p2@(Point x' y'), ts = ts' } <- readIORef ref
+  let
+    zs = (zoomZero ts') { press_complete = t }
+    t = if dx < 1.0 || dy < 1.0 then Nothing else Just (p1,p2)
+    dx = abs (x - x')
+    dy = abs (y - y')
 
-onButtonRelease :: IORef ZoomStack
-                    -> G.DrawingArea
-                    -> Range
-                    -> IO Bool
-onButtonRelease ref canvas (x,y) = let
-    go (width,height) (z@ZoomState{ press = Just (x',y')
-                                  , panstate = PanState (px,py) _
-                                  , xrange = xr
-                                  , yrange = yr }:zs) = zs' where
-
-        zs' = if dx < 1.0 || dy < 1.0 then clearzoom:zs else z':clearzoom:zs
-        z' = zoomZero { xrange = propagate xr (p1x,p2x)
-                      , yrange = propagate yr (p1y,p2y) }
-        clearzoom = z { press = Nothing, mouse_drag = Nothing }
-        dx = abs (x - x')
-        dy = abs (y - y')
-        width' = width-leftmargin-rightmargin
-        height' = height-bottommargin-topmargin
-        p1x = (min x x' - leftmargin)/width' + px
-        p2x = (max x x' - leftmargin)/width' + px
-        p2y = 1 - (min y y' - topmargin)/height' + py
-        p1y = 1 - (max y y' - topmargin)/height' + py
-
-  in do
-    wh <- dsize canvas
-    modifyIORef ref $ go wh
-    return True
+  writeIORef ref zs
+  return True
 
 updateCanvas :: Renderable a -> G.DrawingArea -> IO Bool
-updateCanvas = _updateCanvas True
+updateCanvas r d = _updateCanvas True r d >> return True
 
-_updateCanvas :: Bool -> Renderable a -> G.DrawingArea -> IO Bool
+_updateCanvas :: Bool -> Renderable a -> G.DrawingArea -> IO (PickFn a)
 _updateCanvas finish chart canvas = do
     win <- G.widgetGetDrawWindow canvas
     (width, height) <- G.widgetGetSize canvas
     regio <- G.regionRectangle $ GE.Rectangle 0 0 width height
     let sz = (fromIntegral width,fromIntegral height)
     G.drawWindowBeginPaintRegion win regio
-    G.renderWithDrawable win $ runBackend (defaultEnv bitmapAlignmentFns) (render chart sz)
+    a <- G.renderWithDrawable win $ runBackend (defaultEnv bitmapAlignmentFns) (render chart sz)
     if finish
-      then G.drawWindowEndPaint win >> return True
-      else return True
+      then G.drawWindowEndPaint win >> return a
+      else return a
 
