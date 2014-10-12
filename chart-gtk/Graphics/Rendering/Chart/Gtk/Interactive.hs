@@ -137,14 +137,16 @@ mouseMotion zooms canvas GE.Motion { GE.eventX = x1, GE.eventY = y1 } = do
 
     _ -> return True
 
+
 makeMenu :: RenderablePlus z a => G.Window -> G.DrawingArea -> IORef (ZoomState z) ->
                        IORef (PickFn a) -> z ->  IO G.MenuBar
 makeMenu window canvas ref pickfn z = do
+  -- File menu
   menuBar <- G.menuBarNew
   filemenu <- G.menuItemNewWithMnemonic "_File"
   G.set menuBar [G.containerChild G.:= filemenu]
-  menu <- G.menuNew
-  filemenu `G.menuItemSetSubmenu` menu
+  fmenu <- G.menuNew
+  filemenu `G.menuItemSetSubmenu` fmenu
   save <- G.menuItemNewWithMnemonic "_Save"
   save `G.on` G.menuItemActivate $ do
     chooser <- FC.fileChooserDialogNew Nothing (Just window)
@@ -171,7 +173,19 @@ makeMenu window canvas ref pickfn z = do
 
   quit <- G.menuItemNewWithMnemonic "_Quit"
   G.on quit G.menuItemActivate G.mainQuit
-  G.set menu [G.containerChild G.:= save, G.containerChild G.:= quit]
+  G.set fmenu [G.containerChild G.:= save, G.containerChild G.:= quit]
+
+  -- Chart menu
+  chartmenu <- G.menuItemNewWithMnemonic "_Chart"
+  G.set menuBar [G.containerChild G.:= chartmenu]
+  cmenu <- G.menuNew
+  chartmenu `G.menuItemSetSubmenu` cmenu
+  reset <- G.menuItemNewWithMnemonic "_Reset"
+  reset `G.on` G.menuItemActivate $ do
+    writeIORef ref (zoomZero [z])
+    G.widgetQueueDraw canvas
+
+  G.set cmenu [G.containerChild G.:= reset]
 
   return menuBar
 
@@ -219,22 +233,23 @@ onButtonEvent _ _ _ = return False
 -- End of button events
 
 -- | get the dimentions of the canvas as a pair of Double's
-dsize :: G.DrawingArea -> IO (Double, Double)
+dsize :: G.WidgetClass w => w -> IO (Double, Double)
 dsize canvas = do
   (w, h) <- G.widgetGetSize canvas
   return (fromIntegral w, fromIntegral h)
 
 onButtonRelease :: IORef (ZoomState a) -> Point -> IO Bool
-onButtonRelease ref p1@(Point x y) = do
-  ZoomState { left_press = Just p2@(Point x' y'), ts = ts' } <- readIORef ref
-  let
-    zs = (zoomZero ts') { press_complete = t }
-    t = if dx < 1.0 || dy < 1.0 then Nothing else Just (p1,p2)
-    dx = abs (x - x')
-    dy = abs (y - y')
+onButtonRelease ref p1@(Point x y) = readIORef ref >>= go
+  where
+    go (ZoomState { left_press = Nothing }) = return True
+    go (ZoomState { left_press = Just p2@(Point x' y'), ts = ts' }) = do
+      let zs = (zoomZero ts') { press_complete = t }
+          t  = if dx < 1.0 || dy < 1.0 then Nothing else Just (p1,p2)
+          dx = abs (x - x')
+          dy = abs (y - y')
 
-  writeIORef ref zs
-  return True
+      writeIORef ref zs
+      return True
 
 updateCanvas :: Renderable a -> G.DrawingArea -> IO Bool
 updateCanvas r d = _updateCanvas True r d >> return True
