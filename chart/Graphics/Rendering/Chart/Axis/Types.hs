@@ -49,6 +49,7 @@ module Graphics.Rendering.Chart.Axis.Types(
     axis_ticks,
     axis_labels,
     axis_grid,
+    axis_ranged,
 
     axis_line_style,
     axis_label_style,
