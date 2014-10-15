@@ -26,7 +26,6 @@ import Graphics.Rendering.Chart.Renderable
 import Data.IORef
 import Data.Default.Class
 import Control.Applicative
-import Data.Maybe
 
 
 data RState = forall f . RState {
@@ -41,48 +40,42 @@ data ZoomState =  ZoomState { mouse_pos :: Maybe Point
                             , left_press :: Maybe Point
                             , press_complete :: Maybe (Point,Point)
                             , drag_last :: Maybe Point
-                            , ts :: [RState] }
+                            , rs :: [RState] }
 
 -- | Remove a zoom from the stack
 popZoom :: ZoomState -> ZoomState
-popZoom h@(ZoomState { ts = [_] }) = h
-popZoom h@(ZoomState { ts = (t:ts') }) = zoomZero ts'
+popZoom (ZoomState { rs = (r:rs') }) = zoomZero rs'
+popZoom h = h
 
 -- | Add a state to the stack
 pushZoom :: ZoomState -> RState -> ZoomState
-pushZoom ZoomState{ts=ts'} rs = zoomZero (rs:ts')
+pushZoom ZoomState{rs=rs'} r = zoomZero (r:rs')
 
 zoomZero :: [RState] -> ZoomState
-zoomZero ts = ZoomState { mouse_pos = Nothing
+zoomZero rs' = ZoomState { mouse_pos = Nothing
                         , left_press = Nothing
                         , press_complete = Nothing
                         , drag_last = Nothing
-                        , ts = ts }
-
-lastRenderable :: ZoomState -> Renderable ()
-lastRenderable ZoomState{ts=r:_} = r'
-  where
-    r' = case r of
-      RState { r = re } -> setPickFn nullPickFn re
+                        , rs = rs' }
 
 -------------------------------------------------------------
 -- | computes a possible new InteractiveElement
 zoomTransform :: ZoomState -> Range -> Maybe (Bool,InteractiveElement)
-zoomTransform tss r = ts'
+zoomTransform zs range = mie
   where
-    ts' = case ts tss of
-      RState { pickfn = pf, selectT = select, dragT = drag }:_ -> ts' where
-        ts' = dragTransformed <|> panTransformed
+    mie = case rs zs of
+      RState { pickfn = pf, selectT = select, dragT = drag }:_ -> ie' where
+        ie' = dragTransformed <|> panTransformed
         dragTransformed = do
-          ps <- press_complete tss
-          r <- select ps r pf
-          return (True,r)
+          ps <- press_complete zs
+          ie <- select ps range pf
+          return (True,ie)
 
         panTransformed = do
-          p1 <- drag_last tss
-          p2 <- mouse_pos tss
-          r <- drag (p1,p2) r pf
-          return (False,r)
+          p1 <- drag_last zs
+          p2 <- mouse_pos zs
+          ie <- drag (p1,p2) range pf
+          return (False,ie)
 
       _ -> Nothing
 
@@ -99,25 +92,25 @@ resetExpose el canvas = case el of
     return $ zoomZero [rs]
 
 onExpose :: ZoomState -> G.DrawingArea -> IORef ZoomState -> IO ()
-onExpose ZoomState { ts = [] } _ _ = putStrLn "Warning: No renderable present"
-onExpose zs@ZoomState{ ts = t:ts' } canvas ref = do
+onExpose ZoomState { rs = [] } _ _ = putStrLn "Warning: No renderable present"
+onExpose zs@ZoomState{ rs = r:rs' } canvas ref = do
   range <- dsize canvas
   case zoomTransform zs range of
     -- new rendering, need to save it and maybe push the ref stack
-    Just (save, InteractiveElement { renderable = r
+    Just (save, InteractiveElement { renderable = re
                              , selectTransform = select
                              , dragTransform = drag }) -> do
-      fn' <- _updateCanvas False r canvas
-      let rs = RState { r = r, pickfn = fn', selectT = select, dragT = drag }
+      fn <- _updateCanvas False re canvas
+      let zs' = if save then pushZoom zs r'
+                else zs { drag_last = d', rs = r':rs' }
+          r' = RState { r = re, pickfn = fn, selectT = select, dragT = drag }
           d' = drag_last zs >> mouse_pos zs
-          zs' = if save then pushZoom zs rs
-                else zs { drag_last = d', ts = rs:ts' }
       writeIORef ref zs'
 
-    -- No transform, maybe a mouse box?
+    -- No transform, probably a select box
     Nothing -> do
       let rend :: Renderable ()
-          rend = case t of RState { r = r' } -> setPickFn nullPickFn r'
+          rend = case r of RState { r = re } -> setPickFn nullPickFn re
       _updateCanvas False rend canvas
       drawMouseBox zs canvas
       return ()
@@ -139,7 +132,7 @@ createInteractiveWindow el windowWidth windowHeight = do
     G.widgetSetSizeRequest canvas windowWidth windowHeight
     G.onExpose canvas $ const $ do
       zs <- readIORef zooms
-      case ts zs of
+      case rs zs of
         _:_ -> do
           onExpose zs canvas zooms
           G.widgetGetDrawWindow canvas >>= G.drawWindowEndPaint -- manually finish canvas
@@ -210,7 +203,7 @@ makeMenu window canvas ref = do
         case maybepath of
           Just p -> do
             zs <- readIORef ref
-            case ts zs of
+            case rs zs of
               RState { r = r }:_ -> renderableToFile def p r >> return ()
               _ -> return ()
           Nothing -> return ()
@@ -288,8 +281,8 @@ dsize canvas = do
 onButtonRelease :: IORef ZoomState -> Point -> IO Bool
 onButtonRelease ref p1@(Point x y) = readIORef ref >>= go
   where
-    go ZoomState { left_press = Just p2@(Point x' y'), ts = ts' } = do
-      let zs = (zoomZero ts') { press_complete = t }
+    go ZoomState { left_press = Just p2@(Point x' y'), rs = rs' } = do
+      let zs = (zoomZero rs') { press_complete = t }
           t  = if dx < 1.0 || dy < 1.0 then Nothing else Just (p1,p2)
           dx = abs (x - x')
           dy = abs (y - y')
