@@ -4,6 +4,8 @@
 -- Copyright   :  (c) Bryce Anderson 2014
 -- License     :  BSD-style (see chart/COPYRIGHT)
 
+{-# LANGUAGE ExistentialQuantification #-}
+
 module Graphics.Rendering.Chart.Gtk.Interactive (
   createInteractiveWindow,
   updateCanvas
@@ -23,76 +25,121 @@ import Graphics.Rendering.Chart.Renderable
 
 import Data.IORef
 import Data.Default.Class
+import Control.Applicative
+import Data.Maybe
+
+
+data RState = forall f . RState {
+    r :: Renderable f,
+    pickfn :: PickFn f,
+    selectT :: (Point,Point) -> Range -> PickFn f -> Maybe InteractiveElement,
+    dragT :: (Point,Point) -> Range -> PickFn f -> Maybe InteractiveElement
+}
 
 -- | bits for generating/modifying/querying the state of zoom
-data ZoomState t =  ZoomState { mouse_pos :: Maybe Point
-                              , left_press :: Maybe Point
-                              , press_complete :: Maybe (Point,Point)
-                              , drag_last :: Maybe Point
-                              , ts :: [t] }
+data ZoomState =  ZoomState { mouse_pos :: Maybe Point
+                            , left_press :: Maybe Point
+                            , press_complete :: Maybe (Point,Point)
+                            , drag_last :: Maybe Point
+                            , ts :: [RState] }
 
 -- | Remove a zoom from the stack
-popZoom :: ZoomState a -> ZoomState a
+popZoom :: ZoomState -> ZoomState
 popZoom h@(ZoomState { ts = [_] }) = h
 popZoom h@(ZoomState { ts = (t:ts') }) = zoomZero ts'
 
+-- | Add a state to the stack
+pushZoom :: ZoomState -> RState -> ZoomState
+pushZoom ZoomState{ts=ts'} rs = zoomZero (rs:ts')
 
-zoomZero :: [a] -> ZoomState a
+zoomZero :: [RState] -> ZoomState
 zoomZero ts = ZoomState { mouse_pos = Nothing
                         , left_press = Nothing
                         , press_complete = Nothing
                         , drag_last = Nothing
                         , ts = ts }
 
+lastRenderable :: ZoomState -> Renderable ()
+lastRenderable ZoomState{ts=r:_} = r'
+  where
+    r' = case r of
+      RState { r = re } -> setPickFn nullPickFn re
+
 -------------------------------------------------------------
-
-zoomTransform :: RenderablePlus z a => ZoomState z -> Range -> PickFn a -> ZoomState z
-zoomTransform tss r f = panTransform (clear ts') r f
+-- | computes a possible new InteractiveElement
+zoomTransform :: ZoomState -> Range -> Maybe (Bool,InteractiveElement)
+zoomTransform tss r = ts'
   where
-    ZoomState { ts = z:_ } = tss
-    ts' = maybe tss id transformed
-    clear tss = tss { press_complete = Nothing }
-    transformed = do
-      ps <- press_complete tss
-      z' <- selectTransform ps r f z
-      return $ tss { ts = z':(ts tss) }
+    ts' = case head $ ts tss of
+      RState { pickfn = pf, selectT = select, dragT = drag } -> ts' where
+        ts' = dragTransformed <|> panTransformed
+        dragTransformed = do
+          ps <- press_complete tss
+          r <- select ps r pf
+          return (True,r)
 
-panTransform :: RenderablePlus z a => ZoomState z -> Range -> PickFn a -> ZoomState z
-panTransform tss r f = result
-  where
-    ZoomState { ts = z:t } = tss
-    result = maybe tss id transformed
-    transformed = do
-      p1 <- drag_last tss
-      p2 <- mouse_pos tss
-      let z' = maybe z id $ dragTransform (p1,p2) r f z
-      return $ tss { drag_last = Just p2, ts = z':t }
+        panTransformed = do
+          p1 <- drag_last tss
+          p2 <- mouse_pos tss
+          r <- drag (p1,p2) r pf
+          return (False,r)
+
+-----------------------------------------------------------
+-- | helper methods for rendering
+-----------------------------------------------------------
+resetExpose :: InteractiveElement -> G.DrawingArea -> IORef (Maybe ZoomState) -> IO ()
+resetExpose el canvas ref = case el of
+  InteractiveElement { renderable = r
+                     , selectTransform = select
+                     , dragTransform = drag } -> do
+    fn <- _updateCanvas False r canvas
+    let zs = RState { r = r, pickfn = fn, selectT = select, dragT = drag }
+    writeIORef ref $ Just $ zoomZero [zs]
+
+onExpose :: ZoomState -> G.DrawingArea -> IORef (Maybe ZoomState) -> IO ()
+onExpose zs@ZoomState{ ts = _:ts' } canvas ref = do
+  range <- dsize canvas
+  case zoomTransform zs range of
+    -- new rendering, need to save it and maybe push the ref stack
+    Just (save, InteractiveElement { renderable = r
+                             , selectTransform = select
+                             , dragTransform = drag }) -> do
+      fn' <- _updateCanvas False r canvas
+      let rs = RState { r = r, pickfn = fn', selectT = select, dragT = drag }
+          d' = drag_last zs >> mouse_pos zs
+          zs' = if save then pushZoom zs rs
+                else zs { drag_last = d', ts = rs:ts' }
+      writeIORef ref $ Just zs'
+
+    -- No transform, maybe a mouse box?
+    Nothing -> do
+      let ZoomState { ts = r:_ } = zs
+          rend :: Renderable ()
+          rend = case r of RState { r = r' } -> setPickFn nullPickFn r'
+      _updateCanvas False rend canvas
+      drawMouseBox zs canvas
+      return ()
 
 -----------------------------------------------------------
 
-createInteractiveWindow :: RenderablePlus z a => z -> Int -> Int -> IO G.Window
-createInteractiveWindow z windowWidth windowHeight = do
-    zooms <- newIORef $ zoomZero [z]
-    pickfn <- newIORef nullPickFn :: IO(IORef (PickFn a) )
+-- | Creates a GTK window that supports selection and dragging
+createInteractiveWindow :: InteractiveElement -> Int -> Int -> IO G.Window
+createInteractiveWindow el windowWidth windowHeight = do
+    zooms <- newIORef Nothing
     window <- G.windowNew
     vbox <- G.vBoxNew False 0
     canvas <- G.drawingAreaNew
-    menu <- makeMenu window canvas zooms pickfn z
+    menu <- makeMenu window canvas zooms
     G.widgetSetSizeRequest canvas windowWidth windowHeight
     G.boxPackStart vbox menu G.PackNatural 0
     G.boxPackEnd vbox canvas G.PackGrow 0
     G.set window [G.containerChild G.:= vbox]
     G.widgetSetSizeRequest canvas windowWidth windowHeight
     G.onExpose canvas $ const $ do
-      zs <- readIORef zooms
-      range <- dsize canvas
-      fn <- readIORef pickfn
-      let zs'@ ZoomState { ts =z':_ } = zoomTransform zs range fn
-      -- updates the canvas and saves the new PickFn
-      fn' <- _updateCanvas False (buildRenderable z') canvas
-      writeIORef pickfn fn'
-      writeIORef zooms zs'
-      drawMouseBox zs' canvas
+      maybezs <- readIORef zooms
+      case maybezs of
+        Just zs -> onExpose zs canvas zooms
+        Nothing -> resetExpose el canvas zooms
       G.widgetGetDrawWindow canvas >>= G.drawWindowEndPaint -- manually finish canvas
       return True
 
@@ -102,7 +149,7 @@ createInteractiveWindow z windowWidth windowHeight = do
     return window
 
 -- | Draws the mouse selection box
-drawMouseBox :: ZoomState a -> G.DrawingArea -> IO Bool
+drawMouseBox :: ZoomState -> G.DrawingArea -> IO Bool
 drawMouseBox zoom canvas = do
   case (mouse_pos zoom, left_press zoom) of
     (Just (Point x y), Just (Point x' y')) -> do
@@ -120,27 +167,25 @@ drawMouseBox zoom canvas = do
     _ -> return True
 
 -- | Saves the mouse position to draw the selection rectangle
-mouseMotion :: IORef (ZoomState a) -> G.DrawingArea -> GE.Event -> IO Bool
+mouseMotion :: IORef (Maybe ZoomState) -> G.DrawingArea -> GE.Event -> IO Bool
 mouseMotion zooms canvas GE.Motion { GE.eventX = x1, GE.eventY = y1 } = do
   zs <- readIORef zooms
-  case (left_press zs, drag_last zs) of
+  case (zs >>= left_press, zs >>= drag_last) of
     (Just _, _) -> do
-      (w,h) <- dsize canvas
-      writeIORef zooms $ zs { mouse_pos = Just $ Point x1 y1 }
+      writeIORef zooms $ Just $ (fromJust zs) { mouse_pos = Just $ Point x1 y1 }
       G.widgetQueueDraw canvas
       return True
 
     (_, Just _) -> do
-      writeIORef zooms $ zs { mouse_pos = Just $ Point x1 y1 }
+      writeIORef zooms $ Just $ (fromJust zs) { mouse_pos = Just $ Point x1 y1 }
       G.widgetQueueDraw canvas
       return True
 
     _ -> return True
 
-
-makeMenu :: RenderablePlus z a => G.Window -> G.DrawingArea -> IORef (ZoomState z) ->
-                       IORef (PickFn a) -> z ->  IO G.MenuBar
-makeMenu window canvas ref pickfn z = do
+-- | construct a MenuBar
+makeMenu :: G.Window -> G.DrawingArea -> IORef (Maybe ZoomState) ->  IO G.MenuBar
+makeMenu window canvas ref = do
   -- File menu
   menuBar <- G.menuBarNew
   filemenu <- G.menuItemNewWithMnemonic "_File"
@@ -150,23 +195,24 @@ makeMenu window canvas ref pickfn z = do
   save <- G.menuItemNewWithMnemonic "_Save"
   save `G.on` G.menuItemActivate $ do
     chooser <- FC.fileChooserDialogNew Nothing (Just window)
-                          G.FileChooserActionSave
-                          [("Save",G.ResponseAccept),("Cancel",G.ResponseCancel)]
+                G.FileChooserActionSave
+                [("Save",G.ResponseAccept),("Cancel",G.ResponseCancel)]
     G.fileChooserSetDoOverwriteConfirmation chooser True
     result <- G.dialogRun chooser
     case result of
       G.ResponseCancel -> return ()
       G.ResponseAccept -> do
-        m <- G.fileChooserGetFilename chooser
-        case m of
-          Nothing -> return ()
-          Just p  -> do
-            zs <- readIORef ref
-            sz <- dsize canvas
-            fn <- readIORef pickfn
-            let ZoomState { ts = r:_ } = zoomTransform zs sz fn
-            renderableToFile def p $ buildRenderable r
-            return ()
+        maybepath <- G.fileChooserGetFilename chooser
+        maybezs <- readIORef ref
+        let maybesave :: Maybe (IO ())
+            maybesave = do
+              ZoomState { ts = r:_ } <- maybezs
+              p <- maybepath
+              return $ do
+                sz <- dsize canvas
+                case r of RState { r = r } -> renderableToFile def p r >> return ()
+
+        maybe (return ()) id maybesave
       _ -> return () -- shouldn't get here.
 
     G.widgetDestroy chooser
@@ -176,13 +222,14 @@ makeMenu window canvas ref pickfn z = do
   G.set fmenu [G.containerChild G.:= save, G.containerChild G.:= quit]
 
   -- Chart menu
+  initialState <- readIORef ref
   chartmenu <- G.menuItemNewWithMnemonic "_Chart"
   G.set menuBar [G.containerChild G.:= chartmenu]
   cmenu <- G.menuNew
   chartmenu `G.menuItemSetSubmenu` cmenu
   reset <- G.menuItemNewWithMnemonic "_Reset"
   reset `G.on` G.menuItemActivate $ do
-    writeIORef ref (zoomZero [z])
+    writeIORef ref initialState
     G.widgetQueueDraw canvas
 
   G.set cmenu [G.containerChild G.:= reset]
@@ -191,41 +238,39 @@ makeMenu window canvas ref pickfn z = do
 
 
 -- Handles the button events
-onButtonEvent :: IORef (ZoomState a) -> G.DrawingArea -> GE.Event -> IO Bool
+onButtonEvent :: IORef (Maybe ZoomState) -> G.DrawingArea -> GE.Event -> IO Bool
 onButtonEvent ref canvas (e@GE.Button { GE.eventClick = GE.SingleClick,
                                         GE.eventButton = GE.LeftButton }) = do
-  (w,h) <- dsize canvas
-  modifyIORef ref $ \z -> z { left_press = Just (Point (GE.eventX e) (GE.eventY e)) }
-
+  modifyIORef ref $ fmap modify
   G.widgetQueueDraw canvas
   return True
+    where modify z = z { left_press = Just (Point (GE.eventX e) (GE.eventY e)) }
+
 
 onButtonEvent ref canvas (e@GE.Button { GE.eventClick = GE.ReleaseClick,
                                         GE.eventButton = GE.LeftButton }) = do
-  (w,h) <- dsize canvas
   r <- onButtonRelease ref $ Point (GE.eventX e) (GE.eventY e)
   G.widgetQueueDraw canvas
   return r
 
 onButtonEvent ref canvas (GE.Button { GE.eventClick = GE.SingleClick,
                                       GE.eventButton = GE.RightButton }) = do
-  modifyIORef ref popZoom
+  modifyIORef ref $ fmap popZoom
   G.widgetQueueDraw canvas
   return True
 
 -- | Pan click
 onButtonEvent ref canvas (e@GE.Button { GE.eventClick = GE.SingleClick,
                                         GE.eventButton = GE.MiddleButton }) = do
-  (w,h) <- dsize canvas
   let x = GE.eventX e
       y = GE.eventY e
-  modifyIORef ref $ \z -> z { drag_last = Just (Point x y) }
+  modifyIORef ref $ fmap $ \z -> z { drag_last = Just (Point x y) }
   return True
 
 -- | Pan release
 onButtonEvent ref _ (GE.Button{ GE.eventClick = GE.ReleaseClick,
                                        GE.eventButton = GE.MiddleButton }) = do
-  modifyIORef ref $ \z -> z { drag_last = Nothing, mouse_pos = Nothing }
+  modifyIORef ref $ fmap $ \z -> z { drag_last = Nothing, mouse_pos = Nothing }
   return True
 
 -- | Other mouse events
@@ -238,18 +283,18 @@ dsize canvas = do
   (w, h) <- G.widgetGetSize canvas
   return (fromIntegral w, fromIntegral h)
 
-onButtonRelease :: IORef (ZoomState a) -> Point -> IO Bool
+onButtonRelease :: IORef (Maybe ZoomState) -> Point -> IO Bool
 onButtonRelease ref p1@(Point x y) = readIORef ref >>= go
   where
-    go (ZoomState { left_press = Nothing }) = return True
-    go (ZoomState { left_press = Just p2@(Point x' y'), ts = ts' }) = do
+    go (Just ZoomState { left_press = Just p2@(Point x' y'), ts = ts' }) = do
       let zs = (zoomZero ts') { press_complete = t }
           t  = if dx < 1.0 || dy < 1.0 then Nothing else Just (p1,p2)
           dx = abs (x - x')
           dy = abs (y - y')
 
-      writeIORef ref zs
+      writeIORef ref $ Just zs
       return True
+    go _ = return True
 
 updateCanvas :: Renderable a -> G.DrawingArea -> IO Bool
 updateCanvas r d = _updateCanvas True r d >> return True

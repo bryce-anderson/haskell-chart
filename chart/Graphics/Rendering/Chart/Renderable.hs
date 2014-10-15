@@ -9,13 +9,11 @@
 -- them.
 --
 {-# LANGUAGE TemplateHaskell #-}
-{-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE FunctionalDependencies #-}
-{-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE UndecidableInstances #-}
+{-# LANGUAGE ExistentialQuantification #-}
 
 module Graphics.Rendering.Chart.Renderable(
     RenderablePlus(..),
+    InteractiveElement(..),
     Renderable(..),
     ToRenderable(..),
     PickFn,
@@ -75,18 +73,23 @@ data Renderable a = Renderable {
    render  :: RectSize -> ChartBackend (PickFn a)
 }
 
-class RenderablePlus a f | a -> f  where
+
+data InteractiveElement = forall f . InteractiveElement {
+  renderable :: Renderable f,
+  selectTransform :: (Point,Point) -> Range -> PickFn f -> Maybe InteractiveElement,
+  dragTransform :: (Point,Point) -> Range -> PickFn f -> Maybe InteractiveElement
+}
+
+class RenderablePlus a where
   -- | Renders the window and provides a way to scale the chart
-  buildRenderable :: a -> Renderable f
-  selectTransform :: (Point,Point) -> Range -> PickFn f -> a -> Maybe a
-  dragTransform :: (Point,Point) -> Range -> PickFn f -> a -> Maybe a
+  buildRenderable :: a -> InteractiveElement
 
 -- | A type class abtracting the conversion of a value to a Renderable.
 class ToRenderable a where
   toRenderable :: a -> Renderable ()
 
-instance RenderablePlus a f => ToRenderable a where
-  toRenderable = setPickFn nullPickFn . buildRenderable
+-- instance RenderablePlus a => ToRenderable a where
+--  toRenderable = setPickFn nullPickFn . renderable . buildRenderable
 
 emptyRenderable :: Renderable a
 emptyRenderable = spacer (0,0)

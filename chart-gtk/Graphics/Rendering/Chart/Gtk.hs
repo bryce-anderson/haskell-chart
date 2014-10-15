@@ -82,9 +82,9 @@ toWindow :: (Default r, ToRenderable r) =>Int -> Int -> EC r () -> IO ()
 toWindow windowWidth windowHeight ec = renderableToWindow r windowWidth windowHeight where
                        r = toRenderable (execEC ec)
 
-toInteractiveWindow :: (Default z, RenderablePlus z a) => Int -> Int -> EC z () -> IO ()
+toInteractiveWindow :: (Default z, RenderablePlus z) => Int -> Int -> EC z () -> IO ()
 toInteractiveWindow windowWidth windowHeight ec = makeWindow window where
-  window = createInteractiveWindow (execEC ec) windowWidth windowHeight
+  window = createInteractiveWindow (buildRenderable $ execEC ec) windowWidth windowHeight
 
 -- | Create a new GTK window displaying a renderable.
 createRenderableWindow :: Renderable a -> Int -> Int -> IO G.Window
