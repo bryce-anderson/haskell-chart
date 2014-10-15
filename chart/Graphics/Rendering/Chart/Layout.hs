@@ -206,6 +206,8 @@ data Layout x y = Layout
     --   beneath (@False@) or over (@True@) all plots.
   }
 
+instance (Ord x, Ord y) => ToRenderable (Layout x y) where
+    toRenderable = setPickFn nullPickFn . layoutToRenderable
 
 instance (PlotValue x, PlotValue y) => RenderablePlus (Layout x y) where
   buildRenderable l = i
@@ -417,6 +419,9 @@ data LayoutLR x y1 y2 = LayoutLR
     --   beneath (@False@) or over (@True@) all plots.
   }
 
+instance (Ord x, Ord yl, Ord yr) => ToRenderable (LayoutLR x yl yr) where
+    toRenderable = setPickFn nullPickFn . layoutLRToRenderable
+
 instance (PlotValue x, PlotValue yl, PlotValue yr) =>
                RenderablePlus (LayoutLR x yl yr) where
   buildRenderable l = i
@@ -579,7 +584,6 @@ data StackedLayouts x = StackedLayouts
 -- | A empty 'StackedLayout' with compressions applied.
 instance Default (StackedLayouts x) where
   def = StackedLayouts [] True
-
 
 
 instance Ord x => ToRenderable (StackedLayouts x) where
