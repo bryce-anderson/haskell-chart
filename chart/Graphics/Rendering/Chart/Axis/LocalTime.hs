@@ -96,7 +96,8 @@ timeAxis ::
   -> TimeLabelFn
   -- ^ Format `LocalTime` for labels.
   -> TimeLabelAlignment
-  -> AxisFn LocalTime
+  -> [LocalTime]
+  -> AxisData LocalTime
 timeAxis tseq lseq labelf lal cseq contextf clal pts = AxisData {
     _axis_visibility = def,
     _axis_viewport = vmap(min', max'),
@@ -105,8 +106,7 @@ timeAxis tseq lseq labelf lal cseq contextf clal pts = AxisData {
     _axis_labels   = [ [ (t,l) | (t,l) <- labels labelf   ltimes lal, visible t]
                      , [ (t,l) | (t,l) <- labels contextf ctimes clal, visible t]
                      ],
-    _axis_grid     = [ t     | t <- ltimes, visible t],
-    _axis_ranged   = \(a,b) -> autoTimeAxis [a,b]
+    _axis_grid     = [ t     | t <- ltimes, visible t]
     }
   where
     (minT,maxT)  = case pts of
@@ -228,7 +228,7 @@ noTime _ = ([],[])
 --   of data.  The values to be plotted against this axis can be created
 --   with 'doubleFromLocalTime'.
 autoTimeAxis :: AxisFn LocalTime
-autoTimeAxis pts
+autoTimeAxis _ pts
     | null pts              = timeAxis days    days    (ft "%d-%b-%y") UnderTicks
                                                noTime  (ft "") UnderTicks []
     | tdiff==0 && 100*dsec<1= timeAxis millis1   millis1  (ft "%S%Q") UnderTicks

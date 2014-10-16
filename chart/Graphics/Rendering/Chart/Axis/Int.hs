@@ -36,14 +36,14 @@ defaultIntAxis  = LinearAxisParams {
 
 autoScaledIntAxis :: (Integral i, PlotValue i) =>
                      LinearAxisParams i -> AxisFn i
-autoScaledIntAxis lap ps = scaledIntAxis lap rs
+autoScaledIntAxis lap _ ps = scaledIntAxis lap rs
   where
     rs = (minimum ps,maximum ps)
 
 scaledIntAxis :: (Integral i, PlotValue i) =>
                  LinearAxisParams i -> (i,i) -> AxisData i
 scaledIntAxis lap (minI,maxI) =
-    makeAxis smooth (_la_labelf lap) (labelvs,tickvs,gridvs)
+    makeAxis (_la_labelf lap) (labelvs,tickvs,gridvs)
   where
     r | minI == maxI = (fromIntegral $ minI-1, fromIntegral $ minI+1)
       | otherwise    = (fromIntegral   minI,   fromIntegral   maxI)
@@ -53,7 +53,6 @@ scaledIntAxis lap (minI,maxI) =
                                   ( fromIntegral $ minimum labelvs
                                   , fromIntegral $ maximum labelvs )
     gridvs    = labelvs
-    smooth    = scaledIntAxis lap
 
 stepsInt :: Integral a => a -> Range -> [a]
 stepsInt nSteps range = bestSize (goodness alt0) alt0 alts
@@ -67,9 +66,9 @@ stepsInt nSteps range = bestSize (goodness alt0) alt0 alts
     (alt0:alts)          = map (\n -> steps n range) sampleSteps'
 
     -- throw away sampleSteps that are definitely too small as
-    -- they takes a long time to process                           
+    -- they takes a long time to process
     sampleSteps'         = let rangeMag = ceiling (snd range - fst range)
-                               
+
                                (s1,s2) = span (< (rangeMag `div` nSteps)) sampleSteps
                            in ((reverse . take 5 . reverse) s1) ++ s2
 

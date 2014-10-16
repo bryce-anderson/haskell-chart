@@ -16,8 +16,8 @@ import Graphics.Rendering.Chart.Axis.Types
 
 instance PlotValue () where
     toValue () = 0
-    fromValue  = const ()
-    autoAxis   = const unitAxis
+    fromValue    = const ()
+    autoAxis _ _ = unitAxis
 
 unitAxis :: AxisData ()
 unitAxis = AxisData {
@@ -29,6 +29,5 @@ unitAxis = AxisData {
     _axis_tropweiv = \_       _ -> (),
     _axis_ticks    = [((), 0)],
     _axis_labels   = [[((), "")]],
-    _axis_grid     = [],
-    _axis_ranged   = \_ -> unitAxis
+    _axis_grid     = []
 }

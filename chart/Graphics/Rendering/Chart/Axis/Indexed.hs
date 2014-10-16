@@ -36,8 +36,8 @@ addIndexes as = map (first PlotIndex) (zip [0..] as)
 
 -- | Create an axis for values indexed by position. The
 --   list of strings are the labels to be used.
-autoIndexAxis :: Integral i => [String] -> [i] -> AxisData i
-autoIndexAxis labels vs = indexAxis labels r
+autoIndexAxis :: Integral i => [String] -> AxisFn i
+autoIndexAxis labels _ vs = indexAxis labels r
   where
     r = (minimum vs,maximum vs)
 
@@ -49,8 +49,7 @@ indexAxis labels (imin,imax) = AxisData {
     _axis_ticks    = [],
     _axis_labels   = [filter (\(i,_) -> i >= imin && i <= imax)
                             (zip [0..] labels)],
-    _axis_grid     = [],
-    _axis_ranged   = indexAxis labels
+    _axis_grid     = []
     }
   where
     vport r i = linMap id ( fromIntegral imin - 0.5

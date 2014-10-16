@@ -19,7 +19,8 @@ module Graphics.Rendering.Chart.Axis.Floating(
     scaledAxis,
     autoScaledAxis,
     scaledLogAxis,
-    smoothLogAxis,
+    exactLogAxis,
+    exactLinearAxis,
     autoScaledLogAxis,
     autoSteps,
 
@@ -99,7 +100,7 @@ instance (Show a, RealFloat a) => Default (LinearAxisParams a) where
 
 -- | Generate a linear axis with the specified bounds
 scaledAxis :: RealFloat a => LinearAxisParams a -> (a,a) -> AxisData a
-scaledAxis lap rs@(minV,maxV) = makeAxis' realToFrac realToFrac (smoothAxis lap)
+scaledAxis lap rs@(minV,maxV) = makeAxis' realToFrac realToFrac
                                          (_la_labelf lap) (labelvs,tickvs,gridvs)
   where
     r | minV == maxV = if minV==0 then (-1,1) else
@@ -111,8 +112,8 @@ scaledAxis lap rs@(minV,maxV) = makeAxis' realToFrac realToFrac (smoothAxis lap)
     gridvs    = labelvs
 
 -- | Generate a linear axis with the specified bounds
-smoothAxis :: RealFloat a => LinearAxisParams a -> (a,a) -> AxisData a
-smoothAxis lap rs@(minV,maxV) = axis
+exactLinearAxis :: RealFloat a => LinearAxisParams a -> (a,a) -> AxisData a
+exactLinearAxis lap rs@(minV,maxV) = axis
   where
     range | minV == maxV = if minV==0 then (-1,1) else
                            let d = abs (minV * 0.01) in (minV-d,maxV+d)
@@ -122,13 +123,15 @@ smoothAxis lap rs@(minV,maxV) = axis
     valid = filter (\s -> minVr <= s && s <= maxVr)
     minVr = toRational minV :: Rational
     maxVr = toRational maxV :: Rational
-    axis = makeRangedAxis range realToFrac realToFrac (smoothAxis lap)
-                             (_la_labelf lap) (labelvs,tickvs,labelvs)
+    axis = makeRangedAxis range realToFrac realToFrac
+                   (_la_labelf lap) (labelvs,tickvs,labelvs)
 
 -- | Generate a linear axis automatically, scaled appropriately for the
 -- input data.
 autoScaledAxis :: RealFloat a => LinearAxisParams a -> AxisFn a
-autoScaledAxis lap ps0 = scaledAxis lap rs
+autoScaledAxis lap mode ps0 = case mode of
+  Quantized -> scaledAxis lap rs
+  Exact     -> exactLinearAxis lap rs
   where
     rs = (minimum ps0,maximum ps0)
 
@@ -171,15 +174,17 @@ instance (Show a, RealFloat a) => Default (LogAxisParams a) where
 -- | Generate a log axis automatically, scaled appropriate for the
 -- input data.
 autoScaledLogAxis :: RealFloat a => LogAxisParams a -> AxisFn a
-autoScaledLogAxis lap ps0 = scaledLogAxis lap r
-        where
-          r = (minimum ps0,maximum ps0)
+autoScaledLogAxis lap mode ps0 = case mode of
+  Quantized -> scaledLogAxis lap r
+  Exact     -> exactLogAxis  lap r
+  where
+    r = (minimum ps0,maximum ps0)
 
 -- | Generate a log axis automatically, scaled appropriate for the
 -- input data.
 scaledLogAxis :: RealFloat a => LogAxisParams a -> (a,a) -> AxisData a
 scaledLogAxis lap (minV,maxV) =
-    makeAxis' (realToFrac . log) (realToFrac . exp) (smoothLogAxis lap)
+    makeAxis' (realToFrac . log) (realToFrac . exp)
               (_loga_labelf lap) (wrap rlabelvs, wrap rtickvs, wrap rgridvs)
         where
           wrap      = map fromRational
@@ -190,9 +195,9 @@ scaledLogAxis lap (minV,maxV) =
 
 -- | Generate a log axis automatically, scaled appropriate for the
 -- input data.
-smoothLogAxis :: RealFloat a => LogAxisParams a -> (a,a) -> AxisData a
-smoothLogAxis lap r@(minV,maxV) =
-    makeRangedAxis r (realToFrac . log) (realToFrac . exp) (scaledLogAxis lap)
+exactLogAxis :: RealFloat a => LogAxisParams a -> (a,a) -> AxisData a
+exactLogAxis lap r@(minV,maxV) =
+    makeRangedAxis r (realToFrac . log) (realToFrac . exp)
               (_loga_labelf lap) (wrap rlabelvs', wrap rtickvs', wrap rgridvs')
         where
           wrap      = map fromRational

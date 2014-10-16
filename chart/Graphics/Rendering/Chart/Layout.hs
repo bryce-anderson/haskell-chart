@@ -209,6 +209,7 @@ data Layout x y = Layout
 instance (Ord x, Ord y) => ToRenderable (Layout x y) where
     toRenderable = setPickFn nullPickFn . layoutToRenderable
 
+
 instance (PlotValue x, PlotValue y) => RenderablePlus (Layout x y) where
   buildRenderable l = i
     where
@@ -232,23 +233,25 @@ instance (PlotValue x, PlotValue y) => RenderablePlus (Layout x y) where
         case (lp1, lp2) of
           (LayoutPick_PlotArea x1 y1 _, LayoutPick_PlotArea x2 y2 _) -> Just $ buildRenderable l'
             where
-              l' = l { _layout_x_axis = xaxis, _layout_y_axis = yaxis }
-              lr = (min x1 x2, max x1 x2)
-              tb = (min y1 y2, max y1 y2)
-              xoverride' = _laxis_override $ _layout_x_axis l
-              yoverride' = _laxis_override $ _layout_y_axis l
-              xaxis = (_layout_x_axis l) { _laxis_override = override lr . xoverride' }
-              yaxis = (_layout_y_axis l) { _laxis_override = override tb . yoverride' }
-              override range ax = _axis_ranged ax range
+              l' = l { _layout_x_axis = xaxis', _layout_y_axis = yaxis' }
+              lr = [min x1 x2, max x1 x2]
+              tb = [min y1 y2, max y1 y2]
+              xaxis = _layout_x_axis l
+              yaxis = _layout_y_axis l
+              xaxis' = xaxis { _laxis_override = const $ override xaxis lr }
+              yaxis' = yaxis { _laxis_override = const $ override yaxis tb }
+              override ax range = _laxis_generate ax Exact range
 
           _ -> Nothing
+
+
 
 -- | Transform the apparent device coordinates based on the normalized
 -- view encoded by the Range pair
 transformAxis :: PlotValue x => Range -> LayoutAxis x -> LayoutAxis x
 transformAxis (a,b) axis = let
   override ax = ax' where
-    ax' = _axis_ranged ax (l,r)
+    ax' = _laxis_generate axis Exact [l,r]
     l = _axis_tropweiv ax (0,1) a
     r = _axis_tropweiv ax (0,1) b
   override' = _laxis_override axis
@@ -263,7 +266,7 @@ layoutToRenderable lxy = fillBackground (_layout_background lxy)
     layoutToGrid l = aboveN
            [  tval $ titleToRenderable (_layout_margin l) (_layout_title_style l) (_layout_title l)
            ,  weights (1,1) $ tval $ gridToRenderable $
-                  addMarginsToGrid (lm,lm,lm,lm) (layoutPlotAreaToGrid l)
+                  addMarginsToGrid (lm,lm,lm,lm) (layoutPlotAreaToGrid Quantized l)
            ,  tval $ renderLegend l (getLegendItems l)
            ]
 
@@ -286,8 +289,8 @@ renderLegend l legItems = gridToRenderable g
 -- | Render the plot area of a 'Layout'. This consists of the
 --   actual plot area with all plots, the axis and their titles.
 layoutPlotAreaToGrid :: forall x y. (Ord x, Ord y) =>
-                        Layout x y -> Grid (Renderable (LayoutPick x y y))
-layoutPlotAreaToGrid l = buildGrid LayoutGridElements{
+                        RangeMode -> Layout x y -> Grid (Renderable (LayoutPick x y y))
+layoutPlotAreaToGrid mode l = buildGrid LayoutGridElements{
   lge_plots = mfill (_layout_plot_background l) $ plotsToRenderable l,
   lge_taxis = (tAxis,_laxis_title $ _layout_x_axis l, _laxis_title_style $ _layout_x_axis l),
   lge_baxis = (bAxis,_laxis_title $ _layout_x_axis l, _laxis_title_style $ _layout_x_axis l),
@@ -299,10 +302,10 @@ layoutPlotAreaToGrid l = buildGrid LayoutGridElements{
     xvals = [ x | p <- _layout_plots l, x <- fst $ _plot_all_points p]
     yvals = [ y | p <- _layout_plots l, y <- snd $ _plot_all_points p]
 
-    bAxis = mkAxis E_Bottom (overrideAxisVisibility l _layout_x_axis _layout_bottom_axis_visibility) xvals
-    tAxis = mkAxis E_Top    (overrideAxisVisibility l _layout_x_axis _layout_top_axis_visibility   ) xvals
-    lAxis = mkAxis E_Left   (overrideAxisVisibility l _layout_y_axis _layout_left_axis_visibility  ) yvals
-    rAxis = mkAxis E_Right  (overrideAxisVisibility l _layout_y_axis _layout_right_axis_visibility ) yvals
+    bAxis = mkAxis E_Bottom (overrideAxisVisibility l _layout_x_axis _layout_bottom_axis_visibility) mode xvals
+    tAxis = mkAxis E_Top    (overrideAxisVisibility l _layout_x_axis _layout_top_axis_visibility   ) mode xvals
+    lAxis = mkAxis E_Left   (overrideAxisVisibility l _layout_y_axis _layout_left_axis_visibility  ) mode yvals
+    rAxis = mkAxis E_Right  (overrideAxisVisibility l _layout_y_axis _layout_right_axis_visibility ) mode yvals
     axes = (bAxis,lAxis,tAxis,rAxis)
 
     plotsToRenderable lxy = Renderable {
@@ -422,6 +425,7 @@ data LayoutLR x y1 y2 = LayoutLR
 instance (Ord x, Ord yl, Ord yr) => ToRenderable (LayoutLR x yl yr) where
     toRenderable = setPickFn nullPickFn . layoutLRToRenderable
 
+
 instance (PlotValue x, PlotValue yl, PlotValue yr) =>
                RenderablePlus (LayoutLR x yl yr) where
   buildRenderable l = i
@@ -449,19 +453,19 @@ instance (PlotValue x, PlotValue yl, PlotValue yr) =>
         case (lp1, lp2) of
           (LayoutPick_PlotArea x1 l1 r1, LayoutPick_PlotArea x2 l2 r2) -> Just $ buildRenderable l'
             where
-              l' = l { _layoutlr_x_axis = xaxis
-                     , _layoutlr_left_axis = leftaxis
-                     , _layoutlr_right_axis = rightaxis }
-              lr = (min x1 x2, max x1 x2)
-              tleft = (min l1 l2, max l1 l2)
-              tright = (min r1 r2, max r1 r2)
-              xoverride' = _laxis_override $ _layoutlr_x_axis l
-              loverride' = _laxis_override $ _layoutlr_left_axis l
-              roverride' = _laxis_override $ _layoutlr_right_axis l
-              xaxis = (_layoutlr_x_axis l) { _laxis_override = override lr . xoverride' }
-              leftaxis = (_layoutlr_left_axis l) { _laxis_override = override tleft . loverride' }
-              rightaxis = (_layoutlr_right_axis l) { _laxis_override = override tright . roverride' }
-              override range ax = _axis_ranged ax range
+              l' = l { _layoutlr_x_axis = xaxis'
+                     , _layoutlr_left_axis = leftaxis'
+                     , _layoutlr_right_axis = rightaxis' }
+              lr = [x1, x2]
+              tleft = [l1, l2]
+              tright = [r1, r2]
+              xaxis = _layoutlr_x_axis l
+              leftaxis = _layoutlr_left_axis l
+              rightaxis = _layoutlr_right_axis l
+              xaxis' = xaxis { _laxis_override = const $ override xaxis lr }
+              leftaxis' = leftaxis { _laxis_override = const $ override leftaxis tleft }
+              rightaxis' = rightaxis { _laxis_override = const $ override rightaxis tright }
+              override ax range = _laxis_generate ax Exact range
 
           _ -> Nothing
 
@@ -475,7 +479,7 @@ layoutLRToRenderable llr = fillBackground (_layoutlr_background llr)
     layoutLRToGrid l = aboveN
            [  tval $ titleToRenderable (_layoutlr_margin l) (_layoutlr_title_style l) (_layoutlr_title l)
            ,  weights (1,1) $ tval $ gridToRenderable $
-                  addMarginsToGrid (lm,lm,lm,lm) (layoutLRPlotAreaToGrid l)
+                  addMarginsToGrid (lm,lm,lm,lm) (layoutLRPlotAreaToGrid Quantized l)
            ,  tval $ renderLegendLR l (getLegendItemsLR l)
            ]
 
@@ -506,9 +510,10 @@ renderLegendLR l (lefts,rights) = gridToRenderable g
     -- lm     = _layoutlr_margin l
 
 layoutLRPlotAreaToGrid :: forall x yl yr. (Ord x, Ord yl, Ord yr)
-                       => LayoutLR x yl yr
+                       => RangeMode
+                       -> LayoutLR x yl yr
                        -> Grid (Renderable (LayoutPick x yl yr))
-layoutLRPlotAreaToGrid l = buildGrid LayoutGridElements{
+layoutLRPlotAreaToGrid mode l = buildGrid LayoutGridElements{
   lge_plots = mfill (_layoutlr_plot_background l) $ plotsToRenderable l,
   lge_taxis = (tAxis,_laxis_title $ _layoutlr_x_axis l, _laxis_title_style $ _layoutlr_x_axis l),
   lge_baxis = (bAxis,_laxis_title $ _layoutlr_x_axis l, _laxis_title_style $ _layoutlr_x_axis l),
@@ -522,10 +527,10 @@ layoutLRPlotAreaToGrid l = buildGrid LayoutGridElements{
     yvalsL = [ y | (Left p)  <- _layoutlr_plots l, y <- snd $ _plot_all_points p]
     yvalsR = [ y | (Right p) <- _layoutlr_plots l, y <- snd $ _plot_all_points p]
 
-    bAxis = mkAxis E_Bottom (overrideAxisVisibility l _layoutlr_x_axis _layoutlr_bottom_axis_visibility) xvals
-    tAxis = mkAxis E_Top    (overrideAxisVisibility l _layoutlr_x_axis _layoutlr_top_axis_visibility   ) xvals
-    lAxis = mkAxis E_Left   (overrideAxisVisibility l _layoutlr_left_axis  _layoutlr_left_axis_visibility ) yvalsL
-    rAxis = mkAxis E_Right  (overrideAxisVisibility l _layoutlr_right_axis _layoutlr_right_axis_visibility) yvalsR
+    bAxis = mkAxis E_Bottom (overrideAxisVisibility l _layoutlr_x_axis _layoutlr_bottom_axis_visibility) mode xvals
+    tAxis = mkAxis E_Top    (overrideAxisVisibility l _layoutlr_x_axis _layoutlr_top_axis_visibility   ) mode xvals
+    lAxis = mkAxis E_Left   (overrideAxisVisibility l _layoutlr_left_axis  _layoutlr_left_axis_visibility ) mode yvalsL
+    rAxis = mkAxis E_Right  (overrideAxisVisibility l _layoutlr_right_axis _layoutlr_right_axis_visibility) mode yvalsR
     axes = (bAxis,lAxis,tAxis,rAxis)
 
     plotsToRenderable llr = Renderable {
@@ -627,10 +632,10 @@ renderStackedLayouts slp@(StackedLayouts{_slayouts_layouts=sls@(sl1:_)}) = gridT
         mkPlotArea :: LayoutAxis x -> Grid (Renderable ())
         mkPlotArea axis = case sl of
           StackedLayout l -> fmap noPickFn
-                           $ layoutPlotAreaToGrid
+                           $ layoutPlotAreaToGrid Quantized
                            $ l { _layout_x_axis = axis }
           StackedLayoutLR l -> fmap noPickFn
-                             $ layoutLRPlotAreaToGrid
+                             $ layoutLRPlotAreaToGrid Quantized
                              $ l { _layoutlr_x_axis = axis }
 
         showLegend = not (null (fst legenditems)) || not (null (snd legenditems))
@@ -648,7 +653,7 @@ renderStackedLayouts slp@(StackedLayouts{_slayouts_layouts=sls@(sl1:_)}) = gridT
 
         usedAxis :: LayoutAxis x
         usedAxis = xAxis
-          { _laxis_generate = const (_laxis_generate xAxis all_xvals) }
+          { _laxis_generate = \m _ -> _laxis_generate xAxis m all_xvals }
 
     bg = case sl1 of
            StackedLayout l -> _layout_background l
@@ -803,14 +808,14 @@ axesSpacer f1 a1 f2 a2 = embedRenderable $ do
 
 -- | Construct a axis for the given edge using the attributes
 --   from a 'LayoutAxis' the given values.
-mkAxis :: RectEdge -> LayoutAxis z -> [z] -> Maybe (AxisT z)
-mkAxis edge laxis vals = case axisVisible of
+mkAxis :: RectEdge -> LayoutAxis z -> RangeMode -> [z] -> Maybe (AxisT z)
+mkAxis edge laxis mode vals = case axisVisible of
     False -> Nothing
     True  -> Just $ AxisT edge style rev adata
   where
     style = _laxis_style laxis
     rev   = _laxis_reverse laxis
-    adata = _laxis_override laxis (_laxis_generate laxis vals)
+    adata = _laxis_override laxis (_laxis_generate laxis mode vals)
     vis   = _axis_visibility adata
     axisVisible = _axis_show_labels vis || _axis_show_line vis || _axis_show_ticks vis
 

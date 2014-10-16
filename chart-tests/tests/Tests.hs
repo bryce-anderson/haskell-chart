@@ -249,8 +249,8 @@ test11_ f = f layout1 layout2
             $ layout_y_axis . laxis_title .~ "double values"
             $ def
 
-mkStack ls f = 
-  renderStackedLayouts 
+mkStack ls f =
+  renderStackedLayouts
   $ slayouts_layouts .~ ls
   $ slayouts_compress_legend .~ f
   $ def
@@ -259,7 +259,7 @@ test11a :: LineWidth -> Renderable ()
 test11a lw = test11_ f
    where
      f l1 l2 = mkStack [StackedLayout l1, StackedLayout l2] False
- 
+
 test11b :: LineWidth -> Renderable ()
 test11b lw = test11_ f
   where
@@ -270,17 +270,17 @@ test11b lw = test11_ f
 
 -- should produce the same output as test10
 test11c :: LineWidth -> Renderable ()
-test11c lw =   
+test11c lw =
   mkStack [ StackedLayoutLR (test10LR prices1 lw)] True
 
 test11d :: LineWidth -> Renderable ()
-test11d lw =   
+test11d lw =
   mkStack [ StackedLayoutLR (Test2.chartLR prices1 False lw)
           , StackedLayoutLR (test10LR prices1 lw)
           ] False
 
 test11e :: LineWidth -> Renderable ()
-test11e lw =   
+test11e lw =
   let l2 = Test2.chartLR prices1 False lw
       b = opaque black
       -- how to use lens to get inside the maybe?
@@ -311,7 +311,7 @@ test12 lw = layoutToRenderable layout
         _axis_ticks    = [(v,3) | v <- [0,1..15]],
         _axis_grid     = [0,5..15],
         _axis_labels   = [[(v,show v) | v <- [0,5..15]]]
-    }    
+    }
 
     laxis = AxisData {
         _axis_visibility = def,
@@ -320,14 +320,14 @@ test12 lw = layoutToRenderable layout
         _axis_ticks    = [(v,3) | v <- [0,25..500]],
         _axis_grid     = [0,100..500],
         _axis_labels   = [[(v,show v) | v <- [0,100..500]]]
-    }    
+    }
 
     plot = plot_lines_values .~ [vs1]
          $ def
 
     layout = layout_plots .~ [toPlot plot]
-           $ layout_x_axis . laxis_generate .~ const baxis
-           $ layout_y_axis . laxis_generate .~ const laxis
+           $ layout_x_axis . laxis_generate .~ (\_ _ -> baxis)
+           $ layout_y_axis . laxis_generate .~ (\_ _ -> laxis)
            $ layout_title .~ "Explicit Axes"
            $ def
 
@@ -400,8 +400,8 @@ misc1 fsz rot lw = fillBackground fwhite $ (gridToRenderable t)
       render = \sz@(w,h) -> do
           let xa = w / 2
           let ya = h / 2
-          alignStrokePoints [Point 0 ya,Point w ya] >>= strokePointPath 
-          alignStrokePoints [Point xa 0,Point xa h] >>= strokePointPath 
+          alignStrokePoints [Point 0 ya,Point w ya] >>= strokePointPath
+          alignStrokePoints [Point xa 0,Point xa h] >>= strokePointPath
           render r sz
     }
 
@@ -484,7 +484,7 @@ showTests tests ofn = mapM_ doTest (filter (match tests) allTests)
      doTest (s,size,f) = do
        putStrLn (s ++ "... ")
        ofn (s,size,f)
-     
+
 
 getTests :: [String] -> [(String,(Int,Int),LineWidth -> Renderable ())]
 getTests names = filter (match names) allTests
