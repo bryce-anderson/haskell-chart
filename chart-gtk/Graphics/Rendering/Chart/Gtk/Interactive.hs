@@ -15,6 +15,7 @@ module Graphics.Rendering.Chart.Gtk.Interactive (
 import qualified Graphics.UI.Gtk as G
 import qualified Graphics.UI.Gtk.Gdk.Events as GE
 import qualified Graphics.UI.Gtk.Selectors.FileChooserDialog as FC
+import qualified Graphics.UI.Gtk.Selectors.FileFilter as FF
 import qualified Graphics.Rendering.Cairo as C
 import Graphics.UI.Gtk.Gdk.GC
 
@@ -25,7 +26,10 @@ import Graphics.Rendering.Chart.Renderable
 
 import Data.IORef
 import Data.Default.Class
+import Data.List (find, isSuffixOf)
 import Control.Applicative
+import Control.Monad (forM, foldM_)
+import Control.Lens
 
 
 data RState = forall f . RState {
@@ -41,6 +45,13 @@ data ZoomState =  ZoomState { mouse_pos :: Maybe Point
                             , press_complete :: Maybe (Point,Point)
                             , drag_last :: Maybe Point
                             , rs :: [RState] }
+
+
+data SaveParams = SaveParams { desc :: String
+                             , extension :: String
+                             , mime :: String
+                             , options :: FileOptions }
+
 
 -- | Remove a zoom from the stack
 popZoom :: ZoomState -> ZoomState
@@ -180,6 +191,51 @@ mouseMotion zooms canvas GE.Motion { GE.eventX = x1, GE.eventY = y1 } = do
 
     _ -> return True
 
+filters :: [SaveParams]
+filters = [png, svg, pdf, ps, any]
+  where
+    png = SaveParams "Portable Network Graphic" ".png" "image/png" (tpe PNG)
+    svg = SaveParams "Scaleable Vector Graphic" ".svg" "image/svg+xml" (tpe SVG)
+    pdf = SaveParams "Portable Document Format" ".pdf" "application/pdf" (tpe PDF)
+    ps  = SaveParams "PostSript"                ".ps"  "application/postscript" (tpe PS)
+    any = SaveParams "Any"                      ".*"   "*/*" (tpe PNG)
+    tpe t = fo_format .~ t $ def
+
+-- | make the file filters for the save dialog
+makeFilters :: IO [G.FileFilter]
+makeFilters = forM filters makefilter
+  where
+    makefilter (SaveParams name ext mime _) = do
+      filter <- G.fileFilterNew
+      G.fileFilterSetName filter name
+      G.fileFilterAddPattern filter $ "*" ++ ext
+      G.fileFilterAddMimeType filter mime
+      return filter
+
+-- | Takes a FilePath and FileFilter and returns a correct path and FileOptions
+-- defaults to PNG if it cant determine otherwise
+getFileOptions :: FilePath -> Maybe G.FileFilter -> IO (FilePath,FileOptions)
+getFileOptions path mf = maybe (return def') id total
+  where
+    def' = (path,def)
+    total :: Maybe (IO (FilePath,FileOptions))
+    total = return `fmap` mparam path <|> mcorr path
+    mparam :: FilePath -> Maybe (FilePath,FileOptions)
+    mparam path = do -- its all correct, including the path
+      sp <- find (\sp -> isSuffixOf (extension sp) path) filters
+      return (path, options sp)
+    -- attempt to add an extension and then get options again
+    mcorr :: FilePath -> Maybe (IO (FilePath,FileOptions))
+    mcorr path = go `fmap` mf
+      where
+        go :: G.FileFilter -> IO (FilePath,FileOptions)
+        go f = do
+          fn <- G.fileFilterGetName f
+          case  find (\par -> desc par == fn) filters of
+            Nothing -> return def'
+            Just sp -> return $ maybe def' id $ mparam $ path ++ extension sp
+
+
 -- | construct a MenuBar
 makeMenu :: G.Window -> G.DrawingArea -> IORef ZoomState ->  IO G.MenuBar
 makeMenu window canvas ref = do
@@ -191,9 +247,13 @@ makeMenu window canvas ref = do
   filemenu `G.menuItemSetSubmenu` fmenu
   save <- G.menuItemNewWithMnemonic "_Save"
   save `G.on` G.menuItemActivate $ do
+    -- make the dialog and mount filters
     chooser <- FC.fileChooserDialogNew Nothing (Just window)
                 G.FileChooserActionSave
                 [("Save",G.ResponseAccept),("Cancel",G.ResponseCancel)]
+    filters <- makeFilters
+    foldM_ (\ch f -> G.fileChooserAddFilter ch f >> return ch) chooser filters
+
     G.fileChooserSetDoOverwriteConfirmation chooser True
     result <- G.dialogRun chooser
     case result of
@@ -204,7 +264,13 @@ makeMenu window canvas ref = do
           Just p -> do
             zs <- readIORef ref
             case rs zs of
-              RState { r = r }:_ -> renderableToFile def p r >> return ()
+              RState { r = r }:_ -> do
+                sz <- G.widgetGetSize canvas
+                mf <- G.fileChooserGetFilter chooser
+                (p', opts) <- getFileOptions p mf
+                let opts' = fo_size .~ sz $ opts
+                renderableToFile opts p' r
+                return ()
               _ -> return ()
           Nothing -> return ()
 
